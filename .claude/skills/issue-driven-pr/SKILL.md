@@ -65,13 +65,11 @@ gh pr create \
 - ...
 
 ## Test plan
-- [ ] ...
-
-## Self-check
-- [ ] '6개월 뒤 술자리에서 후배에게 1시간 설명할 수 있는가?' — YES"
+- [ ] ..."
 ```
 - `Closes #N` is mandatory — the issue auto-closes on merge.
-- The self-check line is the project's merge gate (`docs/workflow/agent-driven-development.md`). If the answer is NO, push more commits with explanation or ask the user a strong question first.
+- Keep PR bodies clinical: **Summary** + **Test plan** + (optional) **Out of scope**. Substantive WHY belongs in the commit message body, not in the PR description.
+- **Do not** echo the maintainer's private merge gate (`docs/workflow/agent-driven-development.md`) into PR bodies or commit messages. It's a thought tool, not a template item. If the answer to it is NO for you, push more commits with explanation or ask the user a strong question first — but don't perform the check publicly.
 
 ### 6. Wait for CodeRabbit + CI
 - **CodeRabbit** posts a review automatically (requires the CodeRabbit GitHub App installed on the repo — see setup section below). Treat its comments as a first-pass reviewer: address them, push fixups, mark resolved.
@@ -135,6 +133,7 @@ Mark the bootstrap commit clearly: `chore: bootstrap repo — workflow enforced 
 - "CodeRabbit is being noisy, I'll merge anyway" — no. Reply with reasoning, then merge.
 - "I'll batch 5 unrelated changes into one PR to save review cycles" — no. One issue = one concern = one PR.
 - "ADR can come later" — no. If the PR encodes a non-obvious decision, the ADR lands in the same PR (or its own preceding PR).
+- "Let me prove I considered the merge gate by quoting it in the PR body" — no. The gate is private; quoting it in reviewer-facing artifacts reads as cargo-cult.
 
 ## Why this rule exists
 
