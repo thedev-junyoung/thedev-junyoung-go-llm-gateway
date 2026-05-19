@@ -33,4 +33,6 @@ vendor/
 
 # Local agent state
 .omc/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/commands/
