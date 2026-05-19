@@ -12,7 +12,7 @@
 - [x] 작명 결정: `go-llm-gateway`
 - [x] 문서 골격 (README, design, ADR-001, workflow, roadmap)
 - [ ] GitHub repo 생성 (public, MIT license, `.github/workflows/ci.yml` 골격)
-- [ ] `go mod init github.com/thedev-junyoung/go-llm-gateway`
+- [ ] `go mod init github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway`
 - [ ] CI 골격: `go test ./...` + `golangci-lint`
 - [ ] README RDD — API가 어떻게 쓰일지 보이는 코드 예시 완성 (본인 손으로)
 - [ ] ADR-002 — Provider 인터페이스 설계 결정

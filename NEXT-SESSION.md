@@ -37,7 +37,7 @@ YES면 머지, NO면 강한 질문 → 이해 → 머지.
 
 ## 다음 즉시 행동 (Week 0 잔여 작업)
 1. GitHub repo 생성 (`go-llm-gateway`, public, MIT)
-2. `go mod init github.com/thedev-junyoung/go-llm-gateway`
+2. `go mod init github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway`
 3. `.github/workflows/ci.yml` 골격 (test + lint)
 4. README의 "Quick example" 코드가 진짜 호출 가능한 API가 되도록 ADR-002 작성
 5. ADR-002 작성 — Provider 인터페이스 설계 (본인 손으로 1차 초안)
