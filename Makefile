@@ -27,7 +27,7 @@ test-race: ## Run tests with -race and coverage (matches CI)
 
 .PHONY: vet
 vet: ## go vet
-	$(GO) vet ./...
+	$(GO) vet $(GOFLAGS) ./...
 
 .PHONY: lint
 lint: ## golangci-lint (requires local install)
