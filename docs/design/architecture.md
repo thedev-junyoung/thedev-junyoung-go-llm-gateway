@@ -1,10 +1,10 @@
-# Architecture
+# 아키텍처
 
-Target: v0.1 (2026-07-06). See [v0.1-scope.md](v0.1-scope.md) for the In/Out scope. The diagrams below visualize decisions already made there — they don't introduce new ones.
+목표: v0.1 (2026-07-06). 스코프(In/Out) 는 [v0.1-scope.md](v0.1-scope.md) 참고. 아래 다이어그램은 거기 정해진 결정을 시각화할 뿐, 새 결정을 도입하지 않는다.
 
-## Component dependencies
+## 컴포넌트 의존 관계
 
-The top-level `gateway` package is the **composition root**. No `pkg/*` knows about another `pkg/*`. `internal/testutil` is consumed only by `_test.go` files.
+최상위 `gateway` 패키지가 **composition root** 다. 어떤 `pkg/*` 도 다른 `pkg/*` 를 모른다. `internal/testutil` 은 `_test.go` 파일에서만 import 된다.
 
 ```mermaid
 flowchart TB
@@ -37,9 +37,9 @@ flowchart TB
     TU -. test only .-> RL
 ```
 
-## Chat() request flow
+## Chat() 요청 흐름
 
-Illustrative — current intent based on `v0.1-scope.md`. Exact wiring lands with ADR-002+.
+`v0.1-scope.md` 의 의도를 그린 일러스트레이션 — 실제 배선은 ADR-002+ 에서 확정.
 
 ```mermaid
 sequenceDiagram
@@ -76,13 +76,13 @@ sequenceDiagram
     end
 ```
 
-## Module boundary rules
+## 모듈 경계 규칙
 
-| ✅ Allowed | ❌ Forbidden |
+| ✅ 허용 | ❌ 금지 |
 |---|---|
-| `gateway` imports any `pkg/*` | `pkg/foo` imports `pkg/bar` |
-| `pkg/*` imports `internal/testutil` (in `_test.go` only) | `pkg/*` imports `gateway` |
-| `pkg/*` imports standard library + small, well-known third-party libs | Cyclic imports between any packages |
-| Composition (wiring providers, router, ratelimit, metrics) lives in `gateway` | Composition leaking into `pkg/*` |
+| `gateway` 가 임의 `pkg/*` import | `pkg/foo` 가 `pkg/bar` 를 import |
+| `pkg/*` 가 `internal/testutil` import (`_test.go` 안에서만) | `pkg/*` 가 `gateway` 를 import |
+| `pkg/*` 가 표준 라이브러리 + 작고 검증된 third-party 라이브러리 import | 어떤 패키지 간이든 cyclic import |
+| 합성(provider, router, ratelimit, metrics wiring) 은 `gateway` 안에서만 | 합성이 `pkg/*` 로 새 나가는 것 |
 
-Enforcement: PR review for v0.1. Once we have working code, automate with `go vet -mod=mod` or a depgraph linter (separate ADR).
+강제: v0.1 동안은 PR 리뷰. 실제 코드가 쌓이면 `go vet -mod=mod` 나 depgraph 린터로 자동화 (별도 ADR).
