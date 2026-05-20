@@ -1,11 +1,11 @@
 ---
 name: issue-driven-pr
-description: Use BEFORE touching code in this repo. Enforces the project rule that every change ships as issue → branch → PR → CodeRabbit review → squash-merge to main. Direct commits to main are forbidden except for the one-time bootstrap.
+description: Use BEFORE touching code in this repo. Enforces the project rule that every change ships as issue → branch → PR → AI review (pr-reviewer + adr-critic) + CI → squash-merge to main. Direct commits to main are forbidden except for the documented one-time bootstrap.
 ---
 
 # Issue-Driven PR Workflow (`thedev-junyoung-go-llm-gateway`)
 
-> **The rule:** No change lands on `main` without an issue, a PR, and a passing CodeRabbit review. Bootstrap is the only exception (documented in commit history).
+> **The rule:** No change lands on `main` without an issue, a PR, the in-house AI reviewer's verdict, and green CI. Bootstrap is the only exception (documented in commit history).
 
 This skill is **rigid** — follow the checklist exactly. The discipline is the point: every change becomes an ADR-shaped paper trail (issue = problem, PR = solution, review = critique).
 
@@ -69,12 +69,14 @@ gh pr create \
 ```
 - `Closes #N` is mandatory — the issue auto-closes on merge.
 - Keep PR bodies clinical: **Summary** + **Test plan** + (optional) **Out of scope**. Substantive WHY belongs in the commit message body, not in the PR description.
-- **Do not** echo the maintainer's private merge gate (`docs/workflow/agent-driven-development.md`) into PR bodies or commit messages. It's a thought tool, not a template item. If the answer to it is NO for you, push more commits with explanation or ask the user a strong question first — but don't perform the check publicly.
+- **Do not** echo the maintainer's private merge gate (`docs/workflow/agent-driven-development.md`) into PR bodies or commit messages. It's a thought tool, not a template item.
 
-### 6. Wait for CodeRabbit + CI
-- **CodeRabbit** posts a review automatically (requires the CodeRabbit GitHub App installed on the repo — see setup section below). Treat its comments as a first-pass reviewer: address them, push fixups, mark resolved.
+### 6. Wait for AI review + CI
+- **AI reviewer** runs automatically via `.github/workflows/ai-review.yml`:
+  - `code-reviewer` job — broad code review using the `pr-reviewer` skill (`.claude/skills/pr-reviewer/SKILL.md`)
+  - `adr-critic` job — only when files under `docs/adr/**` changed; uses the `adr-critic` skill
 - **CI** (`.github/workflows/ci.yml`) must be green: `go build`, `go test -race`, `golangci-lint`.
-- Do not merge until **both** are clean. If CodeRabbit raises something you disagree with, reply with reasoning — don't silently dismiss.
+- Do not merge until **both** the AI review verdict and CI are clean. If the reviewer raises something you disagree with, reply on the PR with reasoning — don't silently dismiss.
 - Use `superpowers:receiving-code-review` skill if any feedback feels unclear or technically questionable.
 
 ### 7. Squash-merge to main
@@ -91,50 +93,43 @@ gh pr merge <pr-num> --squash --delete-branch
 | ❌ Never | ✅ Always |
 |---|---|
 | Push to `main` directly | Push to feature branch, PR to main |
-| Merge without CodeRabbit review | Wait for CodeRabbit comment (or `LGTM`) |
+| Merge without an AI review verdict | Wait for the `code-reviewer` (and `adr-critic` if applicable) comment |
 | Merge with red CI | Fix CI, push fixup, re-run |
 | `git add .` / `git add -A` | `git add <explicit-path>` |
 | `--no-verify` to skip hooks | Fix the underlying lint/format/test failure |
 | `--force-push` to `main` | Force-push allowed only on your own feature branch, with `--force-with-lease` |
 | Amend pushed commits | New commit; squash on merge handles cleanup |
-| Drop CodeRabbit feedback silently | Reply with reasoning, then resolve |
+| Drop reviewer feedback silently | Reply with reasoning, then resolve |
 
 ## Bootstrap exception (one-time only)
 
-The very first scaffolding commits (repo init, `go mod init`, CI skeleton, LICENSE, initial docs) **may** land directly on `main` before this skill is enforceable. After the initial push, this skill applies to **every** subsequent change without exception.
+The very first scaffolding commits (repo init, `go mod init`, CI skeleton, LICENSE, initial docs, and the agent-review setup itself) **may** land directly on `main` before this skill is enforceable. After that, this skill applies to **every** subsequent change without exception.
 
-Mark the bootstrap commit clearly: `chore: bootstrap repo — workflow enforced from next PR`.
+## AI review setup (one-time, by the human)
 
-## CodeRabbit setup (one-time, by the human)
+The in-house "agent team" replaces external paid reviewers. See also the project-memory note `project_ai_pr_review.md`.
 
-1. Visit https://www.coderabbit.ai and install the GitHub App on `thedev-junyoung/thedev-junyoung-go-llm-gateway`.
-2. (Optional but recommended) Add `.coderabbit.yaml` at repo root to tune review focus:
-   ```yaml
-   reviews:
-     profile: assertive
-     auto_review:
-       enabled: true
-       drafts: false
-     path_instructions:
-       - path: "docs/adr/**"
-         instructions: "Critique reasoning depth, alternatives considered, and consequences. Be a peer reviewer, not a typo checker."
-       - path: "pkg/**/*.go"
-         instructions: "Check for idiomatic Go, error wrapping (%w), context propagation, and goroutine leaks."
+1. **Generate a Claude Code OAuth token locally:**
+   ```bash
+   claude setup-token
    ```
-3. Enable branch protection on `main` (Settings → Branches):
+2. **Add the token as a repo secret:** Settings → Secrets and variables → Actions → New repository secret
+   - Name: `CLAUDE_CODE_OAUTH_TOKEN`
+   - Value: the token from step 1
+3. **Enable branch protection on `main`** (Settings → Branches → Add rule for `main`):
    - Require a pull request before merging
-   - Require status checks: `test`, `lint`
+   - Require status checks: `test`, `lint`, `code-reviewer`
    - Require conversation resolution before merging
-   - (Optional) Require review from CodeRabbit
+4. **Tuning:** to change review behavior, edit the skill files (`.claude/skills/pr-reviewer/SKILL.md`, `.claude/skills/adr-critic/SKILL.md`) via PR. Skill files are the source of truth; do not put review instructions inline in `ai-review.yml`.
 
 ## Anti-patterns (immediately stop if you catch yourself doing these)
 
 - "Just this once, let me commit directly to main" — no. Bootstrap is past.
-- "CodeRabbit is being noisy, I'll merge anyway" — no. Reply with reasoning, then merge.
+- "The reviewer is being noisy, I'll merge anyway" — no. Reply with reasoning, then merge.
 - "I'll batch 5 unrelated changes into one PR to save review cycles" — no. One issue = one concern = one PR.
 - "ADR can come later" — no. If the PR encodes a non-obvious decision, the ADR lands in the same PR (or its own preceding PR).
 - "Let me prove I considered the merge gate by quoting it in the PR body" — no. The gate is private; quoting it in reviewer-facing artifacts reads as cargo-cult.
 
 ## Why this rule exists
 
-`docs/workflow/agent-driven-development.md`: **타이핑은 위임 OK. 사고는 위임 NOT OK.** Issues force the human to articulate intent before code. PRs force CodeRabbit (and the human) to critique before main. Without this gate, the agent's typing speed becomes a liability instead of an asset.
+`docs/workflow/agent-driven-development.md`: **타이핑은 위임 OK. 사고는 위임 NOT OK.** Issues force the human to articulate intent before code. PRs force the AI reviewer (and the human) to critique before main. Without this gate, the agent's typing speed becomes a liability instead of an asset.

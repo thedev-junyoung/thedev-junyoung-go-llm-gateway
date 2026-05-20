@@ -1,0 +1,64 @@
+name: AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  code-reviewer:
+    name: code-reviewer
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are reviewing pull request #${{ github.event.pull_request.number }} in this repository.
+
+            Follow the rubric in `.claude/skills/pr-reviewer/SKILL.md` exactly.
+            Output a single PR comment using the format prescribed in that skill.
+
+            Cite `file:line` for every concrete claim. Be terse, direct, and Korean.
+
+  adr-critic:
+    name: adr-critic
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - id: changed
+        name: Detect ADR changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if git diff --name-only "$base"..."$head" | grep -q '^docs/adr/'; then
+            echo "adr_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "adr_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.changed.outputs.adr_changed == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            One or more files under `docs/adr/` changed in pull request #${{ github.event.pull_request.number }}.
+
+            Follow the rubric in `.claude/skills/adr-critic/SKILL.md` exactly.
+            Output a single PR comment using the format prescribed in that skill.
+
+            Stress-test the decision. Korean. Assertive.
