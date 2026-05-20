@@ -32,7 +32,7 @@ flowchart TB
     GW --> MT
     GW --> LG
 
-    TU -. test only .-> Provider
+    TU -. test only .-> IF
     TU -. test only .-> RT
     TU -. test only .-> RL
 ```
@@ -66,12 +66,11 @@ sequenceDiagram
         RT->>P: Chat(ctx, req)
         alt timeout / 5xx
             P-->>RT: error
-            RT->>MT: record(failover from→to, reason)
             RT->>P: Chat(ctx, req) (next provider)
         end
         P-->>RT: response
-        RT-->>GW: response
-        GW->>MT: record(latency, tokens, cost)
+        RT-->>GW: response + attempt trace
+        GW->>MT: record(latency, tokens, cost, failover_count, reasons)
         GW->>LG: log done
         GW-->>App: response
     end
