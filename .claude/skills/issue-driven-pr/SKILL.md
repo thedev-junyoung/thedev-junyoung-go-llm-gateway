@@ -109,18 +109,36 @@ The very first scaffolding commits (repo init, `go mod init`, CI skeleton, LICEN
 
 The in-house "agent team" replaces external paid reviewers. See also the project-memory note `project_ai_pr_review.md`.
 
-1. **Generate a Claude Code OAuth token locally:**
-   ```bash
-   claude setup-token
+Pick **one** of the auth paths. The GitHub App path is preferred — OIDC-based, no secret to rotate.
+
+### Option A — Claude Code GitHub App (preferred)
+
+1. In a Claude Code interactive session, run:
    ```
-2. **Add the token as a repo secret:** Settings → Secrets and variables → Actions → New repository secret
+   /install-github-app
+   ```
+   This installs the **Claude Code** GitHub App on the chosen repo and wires up OIDC-based auth automatically. No `secrets.*` to manage.
+2. Manual fallback: install https://github.com/apps/claude on `thedev-junyoung/thedev-junyoung-go-llm-gateway`.
+
+### Option B — OAuth token secret
+
+Use this only if the App path is unavailable (e.g., org policy disallows App install).
+
+1. Locally: `claude setup-token` → copy the token.
+2. Repo Settings → Secrets and variables → Actions → New repository secret
    - Name: `CLAUDE_CODE_OAUTH_TOKEN`
-   - Value: the token from step 1
-3. **Enable branch protection on `main`** (Settings → Branches → Add rule for `main`):
-   - Require a pull request before merging
-   - Require status checks: `test`, `lint`, `code-reviewer`
-   - Require conversation resolution before merging
-4. **Tuning:** to change review behavior, edit the skill files (`.claude/skills/pr-reviewer/SKILL.md`, `.claude/skills/adr-critic/SKILL.md`) via PR. Skill files are the source of truth; do not put review instructions inline in `ai-review.yml`.
+   - Value: the token from step 1.
+
+### Branch protection (after either auth path)
+
+Settings → Branches → Add rule for `main`:
+- Require a pull request before merging
+- Require status checks: `test`, `lint`, `code-reviewer`
+- Require conversation resolution before merging
+
+### Tuning the reviewer
+
+Edit the skill files (`.claude/skills/pr-reviewer/SKILL.md`, `.claude/skills/adr-critic/SKILL.md`) via PR. Skill files are the source of truth; do **not** put review instructions inline in `ai-review.yml`.
 
 ## Anti-patterns (immediately stop if you catch yourself doing these)
 
