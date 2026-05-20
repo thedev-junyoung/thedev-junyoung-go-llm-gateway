@@ -25,14 +25,24 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
           claude_args: |
-            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*)"
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
           prompt: |
-            You are reviewing pull request #${{ github.event.pull_request.number }} in this repository.
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Follow the rubric in `.claude/skills/pr-reviewer/SKILL.md` exactly.
-            Output a single PR comment using the format prescribed in that skill.
+            Review this pull request following the rubric in
+            `.claude/skills/pr-reviewer/SKILL.md` exactly.
 
-            Cite `file:line` for every concrete claim. Be terse, direct, and Korean.
+            The PR branch is checked out in the current working directory.
+
+            POSTING RULES (mandatory):
+            - Use `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+              to post the top-level summary comment in the format prescribed by the skill.
+            - Use `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`)
+              for concrete `file:line` findings that benefit from inline placement.
+            - Only post via these tools — do not return review text as your final message.
+
+            Korean prose, terse, file:line citations. Don't bikeshed.
 
   adr-critic:
     name: adr-critic
@@ -60,11 +70,19 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
           claude_args: |
-            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*)"
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
           prompt: |
-            One or more files under `docs/adr/` changed in pull request #${{ github.event.pull_request.number }}.
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Follow the rubric in `.claude/skills/adr-critic/SKILL.md` exactly.
-            Output a single PR comment using the format prescribed in that skill.
+            One or more files under `docs/adr/` changed in this PR.
+            Review using the rubric in `.claude/skills/adr-critic/SKILL.md` exactly.
 
-            Stress-test the decision. Korean. Assertive.
+            POSTING RULES (mandatory):
+            - Use `gh pr comment ${{ github.event.pull_request.number }} --body "..."`
+              to post the top-level critique in the format prescribed by the skill.
+            - Inline comments via `mcp__github_inline_comment__create_inline_comment`
+              are optional for ADRs — use sparingly, only when a single line is the load-bearing claim.
+            - Only post via these tools — do not return critique text as your final message.
+
+            Korean prose, assertive, stress-test the decision.
