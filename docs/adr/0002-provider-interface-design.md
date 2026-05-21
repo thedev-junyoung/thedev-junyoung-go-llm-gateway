@@ -3,7 +3,7 @@
 - **Status:** Proposed *(agent-generated draft, pending maintainer review)*
 - **Date:** 2026-05-21
 - **Author:** Junyoung
-- **비고:** 본 draft 의 결정/근거는 에이전트가 사용자 요청으로 작성했음. **각 Q 의 `Maintainer note` 줄**을 본인 voice 로 한 줄씩 채우기 전에는 `Status` 를 `Accepted` 로 바꾸지 말 것. 면접 자산 위상상 본인 단어의 흔적이 필요함.
+- **비고:** 본 draft 의 결정/근거는 에이전트가 사용자 요청으로 작성했음. **각 Q 의 `Maintainer note` 줄**을 본인 voice 로 한 줄씩 채우기 전에는 `Status` 를 `Accepted` 로 바꾸지 말 것.
 
 ---
 
@@ -73,7 +73,7 @@
 ### Q6. Context propagation
 
 - **Decision:** A — `context.Value` 로 request_id 흐름. **Key 타입은 unexported `contextKey` struct** (Go 관용).
-- **Agent reasoning:** Go 관용. 외부 API 가 `RequestID string` 필드를 강제하면 사용자 코드가 매번 UUID 생성해야 → 부담. context 기반은 미들웨어가 주입하는 표준 패턴. Key 를 string 으로 쓰면 다른 패키지와 키 충돌 가능 — `type contextKey struct{}` + 패키지별 sentinel 값이 Go 표준 권고. 로깅은 `pkg/logging` 이 context 에서 뽑아 쓰면 됨.
+- **Agent reasoning:** Go 관용. 외부 API 가 `RequestID string` 필드를 강제하면 사용자 코드가 매번 UUID 생성해야 → 부담. context 기반은 미들웨어가 주입하는 표준 패턴. Key 를 string 으로 쓰면 다른 패키지와 충돌 가능 — 본 ADR 은 `type contextKey struct{ name string }` 패턴 (단일 unexported 타입에 `name` 필드, 패키지별 sentinel 변수) 사용. 로깅은 `pkg/logging` 이 context 에서 뽑아 쓰면 됨.
 - **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
 
 ### Q7. Provider 메타 메서드
@@ -118,16 +118,17 @@ type ChatRequest struct {
     Model     string    // vendor model id, e.g. "gpt-4o", "claude-opus-4-7"
     System    string    // optional; adapters place per-vendor (Anthropic top-level, OpenAI as first message)
     Messages  []Message // alternating user/assistant; do NOT include system here
-    MaxTokens int       // 0 means provider default (note: Anthropic adapter enforces non-zero)
+    MaxTokens *int      // nil = vendor default (Anthropic adapter substitutes a configured fallback)
 }
 
 type FinishReason string
 
 const (
-    FinishStop          FinishReason = "stop"
-    FinishLength        FinishReason = "length"
-    FinishContentFilter FinishReason = "content_filter"
-    FinishToolUse       FinishReason = "tool_use"
+    FinishStop          FinishReason = "stop"           // natural end_turn / stop
+    FinishLength        FinishReason = "length"          // max_tokens reached
+    FinishContentFilter FinishReason = "content_filter"  // safety block (OpenAI; Anthropic has no direct equivalent)
+    FinishStopSequence  FinishReason = "stop_sequence"   // hit a configured stop sequence
+    FinishToolUse       FinishReason = "tool_use"        // model wants to invoke a tool
 )
 
 type Usage struct {
@@ -281,6 +282,6 @@ func RequestIDFromContext(ctx context.Context) string {
 - [ ] `tool_calls` / `function_calls` 지원 시점 — Provider 인터페이스에 별도 메서드 vs `ChatRequest` 확장 필드.
 - [ ] Gemini 추가 시 (v0.2+) `ChatRequest` 어떤 필드가 추가될지 — 셋째 벤더가 패턴 검증.
 - [ ] Embedding 인터페이스 — `pkg/embedding/` 별 패키지로 빼는 게 모듈 경계상 맞을지 (Provider 와 분리).
-- [ ] `MaxTokens int` 의 0 = "vendor default" 컨벤션이 충분히 명시적인지, 또는 `*int` (nil = default) 가 더 정확한지. Anthropic adapter 가 non-zero 강제하는 상황 고려하면 `*int` 가 인터페이스 의도를 더 잘 표현.
+- [ ] (해결됨 — Synthesis 에서 `MaxTokens *int` 로 확정. nil = "vendor default", Anthropic adapter 는 설정 가능한 fallback 으로 치환.)
 - [ ] `Content string` 의 multi-modal 표현 한계. v0.2+ 에서 `Content []Block` (Anthropic 스타일) 또는 `Content ContentUnion` 같은 typed union 으로 진화할지. v0.1 의 "lossless 양방향 변환" 주장은 텍스트-only 케이스 한정 — 멀티모달 도입 시 첫 가정이 무너지므로 v0.2 ADR 의 첫 항목.
 - [ ] Sentinel 4개 → N개 확장 트리거. 어떤 사용 사례가 등장하면 `ErrPermission` / `ErrInvalidInput` / `ErrNotFound` / `ErrServer` 를 sentinel 로 승격할지 기준.
