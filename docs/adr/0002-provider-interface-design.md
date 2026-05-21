@@ -65,9 +65,11 @@
 
 ### Q5. 에러 타입 (가장 중요)
 
-- **Decision:** C — `*ProviderError{...}` + sentinel errors (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout` — **router-critical 4개**).
+- **Decision:** C — `*ProviderError{Type, Retriable, RetryAfter, StatusCode, Message, vendor (unexported), Wrapped}` + sentinel errors (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout` — **router-critical 4개**).
 - **Agent reasoning:** Router 가 retry / failover / abort 를 정확히 판단하려면 (1) 분류된 type (`Retriable bool` 포함), (2) router 분기에 직접 쓰이는 카테고리는 sentinel 로 `errors.Is(err, ErrRateLimited)` ergonomics. 단일 `error` (옵션 A) 면 call site 마다 string match 발생 — anti-Go. typed only (옵션 B) 면 sentinel ergonomics 없음. Anthropic 의 `overloaded_error` 같은 특유 시그널을 통일 enum 으로 카테고라이즈하는 가치가 있음.
-  **Sentinel 4개로 한정한 이유:** rate_limit / overloaded / auth / timeout 은 router 가 분기 (retry vs failover vs abort) 에 직접 사용. 나머지 5개 카테고리 (`Permission`, `InvalidInput`, `NotFound`, `Server`, `Unknown`) 는 분류만 필요하고 분기 분기 안 함 → 사용자는 `var pe *ProviderError; errors.As(err, &pe); pe.Type` 패턴으로 접근. sentinel 추가 시점은 실제 사용 사례 등장 시.
+  **Sentinel 4개로 한정한 이유:** rate_limit / overloaded / auth / timeout 은 router 가 분기 (retry vs failover vs abort) 에 직접 사용. 나머지 5개 카테고리 (`Permission`, `InvalidInput`, `NotFound`, `Server`, `Unknown`) 는 분류만 필요하고 분기 안 함 → 사용자는 `var pe *ProviderError; errors.As(err, &pe); pe.Type` 패턴으로 접근. sentinel 추가 시점은 실제 사용 사례 등장 시.
+  **`RetryAfter *time.Duration`:** 벤더가 `Retry-After` 헤더로 보내는 backoff 힌트를 router 에 그대로 전달. Router 가 backoff duration 을 자체 추정하면 vendor 가 알려준 정확한 대기 시간을 버리는 손실 발생.
+  **`vendor` unexported + `Vendor()` accessor:** Negative 항목에서 경고한 `if err.Vendor == "openai"` 안티패턴을 컴파일 타임에 차단. 로깅/디버깅 read 는 accessor 로.
 - **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 — 이 결정이 가장 면접 잘 풀려야 함 -->
 
 ### Q6. Context propagation
@@ -79,7 +81,8 @@
 ### Q7. Provider 메타 메서드
 
 - **Decision:** B — `Name() string` + `SupportsModel(model string) bool`.
-- **Agent reasoning:** Router 가 "gpt-4o 호출인데 어느 provider 가능한가?" 판단할 때, 모델 지식이 provider 구현 옆에 있는 게 응집도 ↑. Config-only mapping (옵션 C) 은 사용자가 매번 매핑 표 유지 — fragile. `SupportsModel` 은 provider 가 자기 모델 목록을 알게 하는 단방향 의존.
+- **Agent reasoning:** Router 가 "gpt-4o 호출인데 어느 provider 가능한가?" 판단할 때, 모델 지식이 provider 구현 옆에 있는 게 응집도 ↑. Config-only mapping (옵션 C) 은 사용자가 매번 매핑 표 유지 — fragile.
+  **솔직한 트레이드오프:** `SupportsModel` 도 모델 목록을 코드에 박는 한 fragile 함은 동일 (벤더가 모델 deprecate / 신규 출시 / 이름 변경 시마다 PR 필요). 차이는 "유지보수 책임이 라이브러리 안 vs 사용자 config" 일 뿐. 라이브러리 측이 짊어지는 게 (1) 사용자 코드에서 모델명 hard-code 안 해도 됨, (2) 신규 모델 지원이 라이브러리 릴리즈로 자동 전파, 두 가치를 산다고 판단. 자세한 운영 비용은 Risks 표 참고.
 - **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
 
 ---
@@ -93,6 +96,7 @@ import (
     "context"
     "encoding/json"
     "errors"
+    "time"
 )
 
 // Provider abstracts a chat-completion vendor (OpenAI, Anthropic, ...).
@@ -164,14 +168,20 @@ const (
 type ProviderError struct {
     Type       ErrorType
     Retriable  bool
-    Vendor     string // "openai", "anthropic"
+    RetryAfter *time.Duration // vendor-provided backoff hint (e.g. Retry-After header); nil if absent
     StatusCode int
     Message    string
     Wrapped    error
+
+    // vendor is unexported on purpose: read via Vendor() to prevent
+    // `if err.Vendor == "openai"` abstraction leaks at call sites.
+    vendor string
 }
 
+func (e *ProviderError) Vendor() string { return e.vendor }
+
 func (e *ProviderError) Error() string {
-    return e.Vendor + ": " + string(e.Type) + ": " + e.Message
+    return e.vendor + ": " + string(e.Type) + ": " + e.Message
 }
 
 func (e *ProviderError) Unwrap() error { return e.Wrapped }
@@ -246,6 +256,18 @@ func RequestIDFromContext(ctx context.Context) string {
 - **단점:** tool_use, multi-modal content blocks 같은 케이스에서 사용자가 원본 못 봄. 디버깅 시 "gateway 가 빠뜨렸나, vendor 가 안 보냈나" 판단 불가.
 - **안 선택한 이유:** Production gateway 의 가치 중 하나가 observability. Raw 보존은 그 가치의 기초.
 
+### Alt 4 — Q7 에서 동적 모델 검증 (vendor API 호출 + 캐시)
+
+- **장점:** `SupportsModel()` 가 hard-coded 목록이 아니라 vendor 의 진실 (`GET /v1/models`) 을 묻는다. 신규 모델 자동 지원, deprecate 자동 반영.
+- **단점:** Anthropic 은 public models 엔드포인트 없음 (2026-05 기준). 두 벤더 동일 패턴이 안 됨. 또한 cold start 마다 외부 호출은 SupportsModel 의 의도(빠른 라우팅 판단)와 어긋남.
+- **안 선택한 이유:** 벤더 불일치 + 호출 부담. 두 벤더 모두 models endpoint 갖추는 시점에 ADR 재방문.
+
+### Alt 5 — Q5 에서 `ProviderError.Vendor` 를 exported public field
+
+- **장점:** 로깅 코드가 `err.Vendor` 로 바로 접근 가능. accessor 메서드 호출 없음.
+- **단점:** Negative 에서 경고한 `if err.Vendor == "openai"` 안티패턴을 컴파일 타임에 막을 수 없음. 사용자 코드가 벤더 분기를 도입하면 abstraction leak.
+- **안 선택한 이유:** 본 ADR 이 스스로 경고한 패턴을 구조적으로 열어두는 건 self-defeating. unexported + accessor 가 약간의 ergonomics 비용으로 안티패턴을 컴파일 차단. ergonomics 손실은 `errors.As + ErrorType` 우선 사용 가이드로 보완.
+
 ---
 
 ## Consequences
@@ -254,14 +276,14 @@ func RequestIDFromContext(ctx context.Context) string {
 
 - Router 가 error 분류만 보고 retry/failover/abort 결정 가능 — 핵심 가치 정상 동작
 - Provider 인터페이스가 thin (3 메서드) — 새 벤더 추가 시 구현 비용 최소
-- Anthropic 의 system 분리 모양을 외부 노출해서 양 벤더 어댑터가 양쪽 다 lossless
+- Anthropic 의 system 분리 모양을 외부 노출해서 양 벤더 어댑터의 텍스트 응답 path 가 lossless (multi-modal content 는 Negative/Risk 참고)
 - Sentinel 에러로 사용자 코드가 `errors.Is(err, provider.ErrRateLimited)` 같이 표준 Go 패턴 사용 가능
 
 ### Negative
 
 - Stream/Embed 가 v0.1 에 없음 → 사용자가 streaming 필요하면 vendor SDK 직접 호출해야 함 (gateway 우회). v0.2 에서 인터페이스에 추가 → breaking change 1회.
 - `Raw json.RawMessage` 노출은 vendor SDK 업데이트 시 응답 schema 변경 가능성 — 사용자가 직접 파싱하면 깨질 수 있음. README/doc 에 "Raw 는 debug 용, production 의존 금지" 명시 필요.
-- `ProviderError` 에 `Vendor string` 노출 → 사용자 코드가 `if err.Vendor == "openai"` 같이 쓰면 abstraction leak. 이건 문서로 가이드 (errors.Is 우선 사용).
+- `ProviderError.Vendor()` 가 read-only accessor 라 직접 비교(`err.Vendor == "openai"`)는 컴파일 차단. 그러나 `if err.Vendor() == "openai"` 식으로 우회 가능 — 안티패턴이지만 doc 가이드만 가능. errors.Is + ErrorType 우선 사용 권장.
 - `ProviderError.Error()` 가 `Message` (vendor 원문) 를 포함 → HTTP 응답 body 로 그대로 흘러가면 vendor 내부 상태 노출 가능. **Gateway layer 는 외부 클라이언트에 `Error()` 문자열을 직접 노출하지 말 것; `ErrorType` 만 매핑해서 반환** (예: HTTP 코드 + sanitized message).
 - `Content string` 단일 필드 — image / document / tool_use 같은 multi-modal block 표현 불가. 해당 케이스는 `Raw` 로 fallback 강제 → 사용자 코드가 raw schema 학습해야 함. v0.2+ 의 typed content 모델 진화 시 breaking change 가능성.
 
@@ -273,6 +295,8 @@ func RequestIDFromContext(ctx context.Context) string {
 | OpenAI 가 응답 shape 을 array of blocks 로 통일 (Anthropic 따라) | `Content string` join 로직만 양 어댑터에 추가 |
 | sentinel error 가 너무 적음 (실제 운영에서 새 카테고리 필요) | `ErrorType` enum 추가 + 새 sentinel. Binary level non-breaking 이나 사용자가 `switch e.Type` exhaustive 검사하면 새 값이 default 로 떨어짐 (Go 컴파일러는 string-base enum exhaustiveness 미체크) — README/doc 에 "default 절 필수" 가이드 추가 필요 |
 | 사용자가 `Raw` 의 schema 에 의존 | doc 강조, 향후 ADR 에서 `Raw` 를 typed union 으로 진화 검토 |
+| `SupportsModel()` 의 모델 목록 유지보수 비용 (벤더 deprecate / 신규 출시 / 이름 변경) | 신규 모델 출시 시 minor release 로 모델 목록 PR. 긴급 시 사용자가 fork 또는 ADR-003 에서 "config override" 메커니즘 도입 검토 |
+| `vendor` unexported 이지만 `Vendor()` accessor 로 우회 가능 | doc 가이드 + 코드 리뷰. 구조적 차단은 컴파일타임 직접 비교만; 우회 의도가 있는 사용자는 못 막음 |
 
 ---
 
@@ -282,6 +306,5 @@ func RequestIDFromContext(ctx context.Context) string {
 - [ ] `tool_calls` / `function_calls` 지원 시점 — Provider 인터페이스에 별도 메서드 vs `ChatRequest` 확장 필드.
 - [ ] Gemini 추가 시 (v0.2+) `ChatRequest` 어떤 필드가 추가될지 — 셋째 벤더가 패턴 검증.
 - [ ] Embedding 인터페이스 — `pkg/embedding/` 별 패키지로 빼는 게 모듈 경계상 맞을지 (Provider 와 분리).
-- [ ] (해결됨 — Synthesis 에서 `MaxTokens *int` 로 확정. nil = "vendor default", Anthropic adapter 는 설정 가능한 fallback 으로 치환.)
 - [ ] `Content string` 의 multi-modal 표현 한계. v0.2+ 에서 `Content []Block` (Anthropic 스타일) 또는 `Content ContentUnion` 같은 typed union 으로 진화할지. v0.1 의 "lossless 양방향 변환" 주장은 텍스트-only 케이스 한정 — 멀티모달 도입 시 첫 가정이 무너지므로 v0.2 ADR 의 첫 항목.
 - [ ] Sentinel 4개 → N개 확장 트리거. 어떤 사용 사례가 등장하면 `ErrPermission` / `ErrInvalidInput` / `ErrNotFound` / `ErrServer` 를 sentinel 로 승격할지 기준.
