@@ -36,3 +36,6 @@ vendor/
 .claude/*
 !.claude/skills/
 !.claude/commands/
+
+# Ephemeral working notes (cheat sheets, draft scratchpads, API exploration)
+scratch/
