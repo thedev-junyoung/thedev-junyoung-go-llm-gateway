@@ -41,13 +41,13 @@
 
 - **Decision:** A — `Chat(ctx, req) (resp, error)` **하나만**.
 - **Agent reasoning:** YAGNI. `Stream()` / `Embed()` 메서드는 v0.1 out of scope. `ErrNotImplemented` stub 은 인터페이스 부풀리기만 하고 실제 가치 없음. v0.2 에서 `Stream()` 추가는 breaking change 1회, 그건 별도 ADR. **참고:** `Chat()` 의 **결과 안에서** `FinishToolUse` / tool_use content block 이 나타나는 것은 v0.1 에서도 가능 (벤더가 응답 끝나면서 "tool 호출 필요" 시그널 보내는 케이스). Stream/Embed 와 tool_use 신호 노출은 별개 — tool_use 신호는 그저 응답 상태일 뿐 별도 메서드 필요 없음.
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** 6주 안에 v0.1 끝내려면 메서드 욕심을 잘라야 한다. `Chat()` 하나가 안 단단하면 `Stream()` 얹어도 모래 위 누각. 실제 사용 사례가 등장하기 전까진 인터페이스 부풀리지 않는다. tool_use 는 응답 상태 신호일 뿐 — 별도 메서드가 아니라는 구분을 흐리면 v0.2 인터페이스 진화가 더 어려워진다. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q2. Request — `system` 모델링
 
 - **Decision:** B — `System string` 필드 분리 + `Messages []Message`.
 - **Agent reasoning:** Anthropic 은 `system` 이 top-level 필수 구조 (cheat sheet 1번). OpenAI 는 어느 쪽이든 변환 가능. 더 엄격한 쪽(Anthropic) 모양을 외부 API 로 노출하면 OpenAI 어댑터는 trivial 하게 messages 배열로 변환 가능 — 반대 방향은 lossy (OpenAI 의 multiple system messages 를 Anthropic 의 단일 system 으로 어떻게?).
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** 두 벤더 중 더 엄격한 쪽을 외부 API 의 모양으로 잡는다는 원칙. lossy 변환을 라이브러리가 떠안으면 사용자 입장에선 "내가 보낸 system 두 개가 왜 한 개로 합쳐졌지?" 같은 의문 발생 — 그 결정의 부담을 라이브러리가 짊어지는 게 잘못된 책임 배분이다. OpenAI 사용자가 multi-system 쓰던 코드는 어댑터가 prepend 로 자연스럽게 흡수 가능. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q3. Response 구조
 
@@ -55,13 +55,13 @@
 - **Agent reasoning:** Content 를 string 으로 통일하려면 Anthropic blocks 를 text-block 만 추출해서 join 해야 함. tool_use 만 있는 응답 등 edge case 는 join 결과가 빈 문자열 → `Raw` 가 fallback (사용자가 직접 파싱).
   CostUSD 는 Provider 책임 아님 (단가표는 `pkg/metrics` 소유). Provider 는 thin 하게.
   **알려진 한계:** image / document / tool_use block 같은 multi-modal content 는 `Content string` 만으로 표현 불가 → 사용자는 `Raw` 로 fallback. 텍스트 + 멀티모달 혼합 케이스가 v0.2 에서 흔해지면 인터페이스 진화 필요 (Open Question 참고).
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** v0.1 은 "텍스트 응답 우선" 가정 위에 서있다. 그 가정이 깨지는 케이스 (멀티모달, tool_use 응답) 를 *조용히 숨기는* 게 아니라 `Raw` 로 *명시적으로 노출* 해서 사용자가 막혔을 때 vendor 응답을 직접 볼 수 있게 한다. Provider 가 비용 계산 같은 부가 책임까지 떠안으면 thin 의 의미가 사라짐 — 단가표는 metrics 가 소유한다. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q4. 모델 식별
 
 - **Decision:** A — `Model string` (벤더 모델명 그대로: `gpt-4o`, `claude-opus-4-7`).
 - **Agent reasoning:** `ModelID` 새 타입은 v0.1 시점에 공유 모델 지식이 없어서 가치 < friction. Alias (`"fast"` → 활성 provider 의 fast 모델) 는 abstraction over abstraction — 어느 alias 가 어디로 가는지 user 가 추적 못 함. Router 의 model→provider 매핑은 ADR-003 에서 별도로.
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** alias 추상화는 "사용자 친화적" 으로 보이지만 디버깅 시점에 "내 요청이 진짜 어느 모델로 갔지?" 라는 질문을 만든다. v0.1 은 그 친화성 비용보다 추적 가능성을 산다. 모델명 매핑 (model → provider) 은 별도 ADR-003 의 책임 — 식별과 라우팅을 한 결정에 묶지 않는다. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q5. 에러 타입 (가장 중요)
 
@@ -71,21 +71,21 @@
   **`RetryAfter *time.Duration`:** 벤더가 `Retry-After` 헤더로 보내는 backoff 힌트를 router 에 그대로 전달. Router 가 backoff duration 을 자체 추정하면 vendor 가 알려준 정확한 대기 시간을 버리는 손실 발생.
   **`vendor` unexported + `Vendor()` accessor:** Negative 항목에서 경고한 `if err.Vendor == "openai"` 안티패턴을 컴파일 타임에 차단. 로깅/디버깅 read 는 accessor 로.
   **Constructor — `NewProviderError(vendor, type, statusCode, retriable, msg, wrapped)`:** `vendor` 가 unexported 이므로 `pkg/provider/openai`, `pkg/provider/anthropic` 같은 별도 어댑터 패키지가 struct literal 로 초기화 불가. 이 constructor 가 어댑터 패키지에서 `vendor` 를 set 하는 유일한 진입점. `RetryAfter *time.Duration` 은 vendor 응답에 헤더가 있을 때만 채워지는 optional 필드 → 별도 chainable setter `WithRetryAfter(d time.Duration) *ProviderError` 로 분리 (생성자 인자 폭증 회피).
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** 본 라이브러리의 핵심 가치는 router 의 failover. 그 router 가 "이 에러를 retry 할까, failover 할까, abort 할까" 를 판단하는 코드 경로가 string match 로 도배되면 라이브러리 가치가 무너진다. 단일 `error` (옵션 A) 는 정확히 그 anti-pattern 으로 가는 길이고, typed only (옵션 B) 는 `errors.Is` 의 표준 Go ergonomics 를 못 얻는다. 옵션 C 는 둘을 모두 갖는다 — typed `ErrorType` 으로 분류, router-critical 4개는 sentinel 로 `errors.Is` 직접 사용. 나머지 5개 카테고리를 sentinel 로 두지 않은 건 의도적 비대칭이다: "분기에 직접 쓰이는 시그널 vs 분류만 필요한 시그널" 의 차이를 인터페이스 모양에 박아두면, 추후 새 카테고리가 등장했을 때 "이건 router 의 분기에 쓰일 거냐?" 라는 질문이 자동으로 떠오른다. Anthropic 의 `overloaded_error` 같은 vendor 특유 시그널을 통일 enum 으로 흡수하는 게 본 라이브러리가 thin wrapper 가 아니라 *진짜 게이트웨이* 인 이유. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q6. Context propagation
 
 - **Decision:** A — `context.Value` 로 request_id 흐름. **Helper 와 key 는 `internal/requestctx`** 에 위치, `gateway` 패키지(composition root)가 외부용 wrapper 노출.
 - **Agent reasoning:** Go 관용. 외부 API 가 `RequestID string` 필드를 강제하면 사용자 코드가 매번 UUID 생성해야 → 부담. context 기반은 미들웨어가 주입하는 표준 패턴. Key 를 string 으로 쓰면 다른 패키지와 충돌 가능 — `type contextKey struct{ name string }` 패턴 (단일 unexported 타입에 `name` 필드, 패키지별 sentinel 변수) 사용.
   **위치 결정 (`internal/requestctx`):** `docs/design/architecture.md` 의 모듈 경계 규칙 — *"어떤 `pkg/*` 도 다른 `pkg/*` 를 모른다"* — 을 지키려면 cross-cutting helper 가 `pkg/*` 안에 있을 수 없다. helper 가 `pkg/provider` 에 있으면 `pkg/logging`, `pkg/router`, `pkg/metrics` 가 request id 를 읽기 위해 `pkg/provider` 를 import 해야 하고 이는 layering 정면 위반. `internal/` 패키지는 `pkg/*` 가 아니라 외부 공개되지 않는 공유 경계 → 모든 `pkg/*` 가 자유롭게 import 가능. 외부 사용자는 `gateway.WithRequestID(...)` 한 곳을 호출 (composition root 에서 `internal/requestctx` 위로 thin wrapping). 옵션 C (`pkg/requestid` 외부 노출 패키지) 도 같은 layering 위반을 그대로 반복하므로 기각.
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** ADR-002 자체가 `architecture.md` 의 모듈 경계 규칙을 깨버리면, 그건 라이브러리의 첫 단추부터 layering 이 흔들린다는 신호다. cross-cutting concern 을 `pkg/*` 안에 두는 건 단기적으로 편하지만, 두 번째/세 번째 패키지가 같은 helper 를 필요로 하는 순간 cyclic import 가 시작된다. `internal/` 은 정확히 이런 공유 경계를 위해 Go 가 마련한 메커니즘이고, 외부 사용자가 직접 set 할 일이 없는 helper 는 외부에 노출할 이유가 없다. 외부 API 노출 면적이 작을수록 추후 변경 자유도가 커진다. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ### Q7. Provider 메타 메서드
 
 - **Decision:** B — `Name() string` + `SupportsModel(model string) bool`.
 - **Agent reasoning:** Router 가 "gpt-4o 호출인데 어느 provider 가능한가?" 판단할 때, 모델 지식이 provider 구현 옆에 있는 게 응집도 ↑. Config-only mapping (옵션 C) 은 사용자가 매번 매핑 표 유지 — fragile.
   **솔직한 트레이드오프:** `SupportsModel` 도 모델 목록을 코드에 박는 한 fragile 함은 동일 (벤더가 모델 deprecate / 신규 출시 / 이름 변경 시마다 PR 필요). 차이는 "유지보수 책임이 라이브러리 안 vs 사용자 config" 일 뿐. 라이브러리 측이 짊어지는 게 (1) 사용자 코드에서 모델명 hard-code 안 해도 됨, (2) 신규 모델 지원이 라이브러리 릴리즈로 자동 전파, 두 가치를 산다고 판단. 자세한 운영 비용은 Risks 표 참고.
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
+- **Maintainer note:** "사용자가 매핑 표 유지 vs 라이브러리가 모델 목록 유지" 는 결국 책임을 누가 짊어지냐의 문제. 라이브러리가 짊어지면 신규 모델 출시 시 minor release 1회 vs 모든 사용자 config 수정. 후자는 사용자 경험 측면에서 명백히 손해. 단, 이 결정은 "라이브러리 유지보수자가 모델 출시를 따라잡는다" 라는 약속을 동반한다 — 약속을 못 지키면 옵션 C 보다 더 나빠질 수 있는 결정 (사용자가 lib version 못 올리면 신규 모델 영영 못 씀). v0.1 단계에서 이 약속을 감당 가능하다 판단. *(agent-drafted; rewrite in maintainer voice before Status → Accepted)*
 
 ---
 
@@ -137,7 +137,12 @@ const (
     FinishLength        FinishReason = "length"          // max_tokens reached
     FinishContentFilter FinishReason = "content_filter"  // safety block (OpenAI; Anthropic has no direct equivalent)
     FinishStopSequence  FinishReason = "stop_sequence"   // hit a configured stop sequence
-    FinishToolUse       FinishReason = "tool_use"        // model wants to invoke a tool
+    FinishToolUse       FinishReason = "tool_use"        // model wants to invoke a tool.
+                                                          // v0.1 exposes the *signal* only; there is no typed
+                                                          // tool-calling interface yet. Callers receiving this
+                                                          // value must parse `ChatResponse.Raw` themselves to
+                                                          // extract the tool_use block. A typed tool-calling
+                                                          // surface is deferred to v0.2 (see Open Questions).
 )
 
 type Usage struct {
