@@ -6,18 +6,19 @@
 
 ---
 
-## Week 0 — 기초 (~ 2026-05-25)
+## Week 0 — 기초 (~ 2026-05-25, **실제 종료: 2026-05-27**)
 **모드: 본인 100%. 에이전트는 조언자만.**
 
 - [x] 작명 결정: `go-llm-gateway`
 - [x] 문서 골격 (README, design, ADR-001, workflow, roadmap)
-- [ ] GitHub repo 생성 (public, MIT license, `.github/workflows/ci.yml` 골격)
-- [ ] `go mod init github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway`
-- [ ] CI 골격: `go test ./...` + `golangci-lint`
-- [ ] README RDD — API가 어떻게 쓰일지 보이는 코드 예시 완성 (본인 손으로)
-- [ ] ADR-002 — Provider 인터페이스 설계 결정
+- [x] GitHub repo 생성 (public, MIT license, `.github/workflows/ci.yml` 골격) — 2026-05-19
+- [x] `go mod init github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway` — 2026-05-20
+- [x] CI 골격: `go test ./...` + `golangci-lint` + Dependabot (`#20, #30, #32`)
+- [x] README RDD — API 가 어떻게 쓰일지 보이는 코드 예시 완성 — 2026-05-20
+- [⏳] ADR-002 — Provider 인터페이스 설계 결정 (PR `#34`, 본인 voice 채우는 중)
 
 **Deliverable:** repo public + README + ADR 2편 + CI green
+**Status:** ADR-002 Status `Proposed → Accepted` 전환 + PR `#34` 머지 완료 시 Week 0 공식 종료. 그 외 작업은 모두 main 머지됨.
 
 ---
 
