@@ -39,3 +39,6 @@ vendor/
 
 # Ephemeral working notes (cheat sheets, draft scratchpads, API exploration)
 scratch/
+
+# Private decision logs (review summaries, trade-off captures, maintainer voice drafts)
+decision/

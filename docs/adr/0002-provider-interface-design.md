@@ -70,12 +70,14 @@
   **Sentinel 4개로 한정한 이유:** rate_limit / overloaded / auth / timeout 은 router 가 분기 (retry vs failover vs abort) 에 직접 사용. 나머지 5개 카테고리 (`Permission`, `InvalidInput`, `NotFound`, `Server`, `Unknown`) 는 분류만 필요하고 분기 안 함 → 사용자는 `var pe *ProviderError; errors.As(err, &pe); pe.Type` 패턴으로 접근. sentinel 추가 시점은 실제 사용 사례 등장 시.
   **`RetryAfter *time.Duration`:** 벤더가 `Retry-After` 헤더로 보내는 backoff 힌트를 router 에 그대로 전달. Router 가 backoff duration 을 자체 추정하면 vendor 가 알려준 정확한 대기 시간을 버리는 손실 발생.
   **`vendor` unexported + `Vendor()` accessor:** Negative 항목에서 경고한 `if err.Vendor == "openai"` 안티패턴을 컴파일 타임에 차단. 로깅/디버깅 read 는 accessor 로.
-- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 — 이 결정이 가장 면접 잘 풀려야 함 -->
+  **Constructor — `NewProviderError(vendor, type, statusCode, retriable, msg, wrapped)`:** `vendor` 가 unexported 이므로 `pkg/provider/openai`, `pkg/provider/anthropic` 같은 별도 어댑터 패키지가 struct literal 로 초기화 불가. 이 constructor 가 어댑터 패키지에서 `vendor` 를 set 하는 유일한 진입점. `RetryAfter *time.Duration` 은 vendor 응답에 헤더가 있을 때만 채워지는 optional 필드 → 별도 chainable setter `WithRetryAfter(d time.Duration) *ProviderError` 로 분리 (생성자 인자 폭증 회피).
+- **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
 
 ### Q6. Context propagation
 
-- **Decision:** A — `context.Value` 로 request_id 흐름. **Key 타입은 unexported `contextKey` struct** (Go 관용).
-- **Agent reasoning:** Go 관용. 외부 API 가 `RequestID string` 필드를 강제하면 사용자 코드가 매번 UUID 생성해야 → 부담. context 기반은 미들웨어가 주입하는 표준 패턴. Key 를 string 으로 쓰면 다른 패키지와 충돌 가능 — 본 ADR 은 `type contextKey struct{ name string }` 패턴 (단일 unexported 타입에 `name` 필드, 패키지별 sentinel 변수) 사용. 로깅은 `pkg/logging` 이 context 에서 뽑아 쓰면 됨.
+- **Decision:** A — `context.Value` 로 request_id 흐름. **Helper 와 key 는 `internal/requestctx`** 에 위치, `gateway` 패키지(composition root)가 외부용 wrapper 노출.
+- **Agent reasoning:** Go 관용. 외부 API 가 `RequestID string` 필드를 강제하면 사용자 코드가 매번 UUID 생성해야 → 부담. context 기반은 미들웨어가 주입하는 표준 패턴. Key 를 string 으로 쓰면 다른 패키지와 충돌 가능 — `type contextKey struct{ name string }` 패턴 (단일 unexported 타입에 `name` 필드, 패키지별 sentinel 변수) 사용.
+  **위치 결정 (`internal/requestctx`):** `docs/design/architecture.md` 의 모듈 경계 규칙 — *"어떤 `pkg/*` 도 다른 `pkg/*` 를 모른다"* — 을 지키려면 cross-cutting helper 가 `pkg/*` 안에 있을 수 없다. helper 가 `pkg/provider` 에 있으면 `pkg/logging`, `pkg/router`, `pkg/metrics` 가 request id 를 읽기 위해 `pkg/provider` 를 import 해야 하고 이는 layering 정면 위반. `internal/` 패키지는 `pkg/*` 가 아니라 외부 공개되지 않는 공유 경계 → 모든 `pkg/*` 가 자유롭게 import 가능. 외부 사용자는 `gateway.WithRequestID(...)` 한 곳을 호출 (composition root 에서 `internal/requestctx` 위로 thin wrapping). 옵션 C (`pkg/requestid` 외부 노출 패키지) 도 같은 layering 위반을 그대로 반복하므로 기각.
 - **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
 
 ### Q7. Provider 메타 메서드
@@ -122,7 +124,10 @@ type ChatRequest struct {
     Model     string    // vendor model id, e.g. "gpt-4o", "claude-opus-4-7"
     System    string    // optional; adapters place per-vendor (Anthropic top-level, OpenAI as first message)
     Messages  []Message // alternating user/assistant; do NOT include system here
-    MaxTokens *int      // nil = vendor default (Anthropic adapter substitutes a configured fallback)
+    MaxTokens *int      // nil = adapter-configured default.
+                        //   OpenAI adapter:    nil passed through (vendor default applies).
+                        //   Anthropic adapter: nil substitutes adapter-configured fallback;
+                        //                       no fallback configured → ErrInvalidInput.
 }
 
 type FinishReason string
@@ -186,6 +191,28 @@ func (e *ProviderError) Error() string {
 
 func (e *ProviderError) Unwrap() error { return e.Wrapped }
 
+// NewProviderError is the constructor adapter packages (pkg/provider/openai,
+// pkg/provider/anthropic, ...) MUST use — the unexported `vendor` field cannot
+// be set via struct literal from outside this package.
+func NewProviderError(vendor string, t ErrorType, statusCode int, retriable bool, msg string, wrapped error) *ProviderError {
+    return &ProviderError{
+        Type:       t,
+        Retriable:  retriable,
+        StatusCode: statusCode,
+        Message:    msg,
+        Wrapped:    wrapped,
+        vendor:     vendor,
+    }
+}
+
+// WithRetryAfter attaches a vendor-provided backoff hint and returns the
+// receiver so adapters can chain: NewProviderError(...).WithRetryAfter(d).
+// Only set when the vendor response actually carries Retry-After.
+func (e *ProviderError) WithRetryAfter(d time.Duration) *ProviderError {
+    e.RetryAfter = &d
+    return e
+}
+
 // Is allows errors.Is(err, ErrRateLimited) etc.
 func (e *ProviderError) Is(target error) bool {
     switch target {
@@ -212,23 +239,54 @@ var (
     ErrTimeout     = errors.New("provider: timeout")
 )
 
-// Context key for request id propagation (Q6). Unexported struct type avoids
-// collision with other packages that use string keys.
+// Request id propagation does NOT live in this package — see Q6.
+// Helper and key are in `internal/requestctx`; external entry point is
+// `gateway.WithRequestID(ctx, id)`. Keeping them out of pkg/provider
+// preserves the "pkg/* must not import pkg/*" rule in architecture.md.
+```
+
+### Request id helper (`internal/requestctx` + `gateway` wrapper)
+
+`pkg/logging`, `pkg/router`, `pkg/metrics` all need to read the request id, so the key/helper cannot live in any `pkg/*`. It is hoisted to `internal/`, then the composition root re-exposes a single external entry point.
+
+```go
+// internal/requestctx/requestctx.go
+package requestctx
+
+import "context"
+
 type contextKey struct{ name string }
 
-var requestIDKey = contextKey{"requestID"}
+var requestIDKey = contextKey{name: "requestID"}
 
-// WithRequestID returns a context carrying the given request id.
-func WithRequestID(ctx context.Context, id string) context.Context {
+// With returns a context carrying the given request id.
+func With(ctx context.Context, id string) context.Context {
     return context.WithValue(ctx, requestIDKey, id)
 }
 
-// RequestIDFromContext returns the request id stored in ctx, or "" if absent.
-func RequestIDFromContext(ctx context.Context) string {
+// From returns the request id stored in ctx, or "" if absent.
+func From(ctx context.Context) string {
     if v, ok := ctx.Value(requestIDKey).(string); ok {
         return v
     }
     return ""
+}
+```
+
+```go
+// gateway/requestid.go
+package gateway
+
+import (
+    "context"
+
+    "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/internal/requestctx"
+)
+
+// WithRequestID attaches a request id to ctx. Middleware or callers use this
+// to correlate logs, metrics, and provider failover traces.
+func WithRequestID(ctx context.Context, id string) context.Context {
+    return requestctx.With(ctx, id)
 }
 ```
 
