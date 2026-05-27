@@ -16,11 +16,23 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
+      - id: actor
+        name: Detect bot-authored PR
+        run: |
+          if [[ "${{ github.event.pull_request.user.type }}" == "Bot" ]]; then
+            echo "is_bot=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping AI code review for bot-authored PR (${{ github.event.pull_request.user.login }})."
+          else
+            echo "is_bot=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: steps.actor.outputs.is_bot == 'false'
         with:
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
+        if: steps.actor.outputs.is_bot == 'false'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_sticky_comment: true
@@ -49,11 +61,23 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
+      - id: actor
+        name: Detect bot-authored PR
+        run: |
+          if [[ "${{ github.event.pull_request.user.type }}" == "Bot" ]]; then
+            echo "is_bot=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping ADR critique for bot-authored PR (${{ github.event.pull_request.user.login }})."
+          else
+            echo "is_bot=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: steps.actor.outputs.is_bot == 'false'
         with:
           fetch-depth: 0
 
       - id: changed
+        if: steps.actor.outputs.is_bot == 'false'
         name: Detect ADR changes
         run: |
           base="${{ github.event.pull_request.base.sha }}"
@@ -64,7 +88,7 @@ jobs:
             echo "adr_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - if: steps.changed.outputs.adr_changed == 'true'
+      - if: steps.actor.outputs.is_bot == 'false' && steps.changed.outputs.adr_changed == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
