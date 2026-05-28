@@ -154,9 +154,11 @@ const (
 // Note: external callers can still build a literal that sets only the
 // exported fields (Type / Retriable / StatusCode / RetryAfter), leaving
 // vendor/message/wrapped at zero values. NewProviderError is the contract;
-// the type system catches only the unexported fields. Adapter PRs should be
-// reviewed for this — if it shows up in practice, the next iteration moves
-// every field unexported and exposes accessors only.
+// the type system catches only the unexported fields.
+//
+// TODO(#41): if any adapter PR slips a literal-init bypass, move every
+// field unexported and expose Type/Retriable/StatusCode/RetryAfter via
+// accessor methods only.
 //
 // The name intentionally repeats the package: provider.Error would collide
 // with the built-in `error` interface in reader's heads, while ProviderError

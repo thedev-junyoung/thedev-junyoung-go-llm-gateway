@@ -73,6 +73,23 @@ func TestProviderError_Is_RouterCriticalSentinels(t *testing.T) {
 		{"server does not match ErrOverloaded", provider.ErrorTypeServer, provider.ErrOverloaded, false},
 		{"unknown does not match any sentinel", provider.ErrorTypeUnknown, provider.ErrTimeout, false},
 		{"not_found does not match any sentinel", provider.ErrorTypeNotFound, provider.ErrRateLimited, false},
+
+		// Cross-sentinel negative matrix — each sentinel-mapped ErrorType
+		// must NOT match the other three sentinels. Without these, an Is()
+		// regression like `case ErrOverloaded: return Type == ... || Type == RateLimit`
+		// would slip through.
+		{"rate_limit does not match ErrOverloaded", provider.ErrorTypeRateLimit, provider.ErrOverloaded, false},
+		{"rate_limit does not match ErrAuthFailed", provider.ErrorTypeRateLimit, provider.ErrAuthFailed, false},
+		{"rate_limit does not match ErrTimeout", provider.ErrorTypeRateLimit, provider.ErrTimeout, false},
+		{"overloaded does not match ErrRateLimited", provider.ErrorTypeOverloaded, provider.ErrRateLimited, false},
+		{"overloaded does not match ErrAuthFailed", provider.ErrorTypeOverloaded, provider.ErrAuthFailed, false},
+		{"overloaded does not match ErrTimeout", provider.ErrorTypeOverloaded, provider.ErrTimeout, false},
+		{"auth does not match ErrRateLimited", provider.ErrorTypeAuth, provider.ErrRateLimited, false},
+		{"auth does not match ErrOverloaded", provider.ErrorTypeAuth, provider.ErrOverloaded, false},
+		{"auth does not match ErrTimeout", provider.ErrorTypeAuth, provider.ErrTimeout, false},
+		{"timeout does not match ErrRateLimited", provider.ErrorTypeTimeout, provider.ErrRateLimited, false},
+		{"timeout does not match ErrOverloaded", provider.ErrorTypeTimeout, provider.ErrOverloaded, false},
+		{"timeout does not match ErrAuthFailed", provider.ErrorTypeTimeout, provider.ErrAuthFailed, false},
 	}
 
 	for _, tc := range cases {
