@@ -268,15 +268,22 @@ func TestChat_RetryAfterHeader(t *testing.T) {
 func TestChat_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
-	// Server that blocks long enough for ctx to fire.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(200 * time.Millisecond)
-		_, _ = w.Write([]byte(`{}`))
+	// Signal-driven cancellation: server pings `received` as soon as the
+	// request arrives, then the test cancels the context. No wall-clock
+	// sleep anywhere.
+	received := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(received)
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
 	c := openai.New("sk-test", openai.WithBaseURL(server.URL))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-received
+		cancel()
+	}()
 	defer cancel()
 
 	_, err := c.Chat(ctx, provider.ChatRequest{

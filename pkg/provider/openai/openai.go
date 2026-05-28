@@ -54,9 +54,15 @@ func WithBaseURL(u string) Option {
 }
 
 // WithHTTPClient injects a custom *http.Client — usually for timeouts,
-// instrumentation, or test fakes.
+// instrumentation, or test fakes. Nil is ignored so a misconfigured caller
+// doesn't get a nil-deref inside Chat().
 func WithHTTPClient(h *http.Client) Option {
-	return func(c *Client) { c.http = h }
+	return func(c *Client) {
+		if h == nil {
+			return
+		}
+		c.http = h
+	}
 }
 
 // WithModels replaces the supported-model set. Use to opt new models in
