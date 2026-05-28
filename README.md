@@ -68,6 +68,7 @@ Out of v0.1: semantic cache, streaming, embedding APIs, Gemini/Bedrock/Vertex, H
 - [Design — v0.1 scope](docs/design/v0.1-scope.md)
 - [Design — Architecture diagram](docs/design/architecture.md)
 - [ADR-001 — Why a Go LLM gateway](docs/adr/0001-why-go-llm-gateway.md)
+- [ADR-002 — Provider interface design](docs/adr/0002-provider-interface-design.md) *(draft)*
 - [Roadmap](docs/roadmap.md)
 - [Agent-driven development rules](docs/workflow/agent-driven-development.md)
 
