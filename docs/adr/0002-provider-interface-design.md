@@ -172,7 +172,11 @@ type Usage struct {
 }
 
 type ChatResponse struct {
-    Content      string          // joined plain text; non-text blocks surfaced via Raw
+    Content      string          // joined plain text. Adapters MUST join Anthropic-style
+                                   // multiple text blocks with "\n" (LF) separator — fixed by
+                                   // contract so the same ChatRequest yields byte-identical
+                                   // Content across providers. Non-text blocks (tool_use, image)
+                                   // are surfaced via Raw.
     FinishReason FinishReason    // gateway-normalized vocabulary (vendor reasons mapped here)
     Usage        Usage
     Raw          json.RawMessage // original vendor response body for debugging / future tool_use unwrapping
@@ -385,7 +389,7 @@ func RequestIDFromContext(ctx context.Context) string {
 ### Negative
 
 - Stream/Embed 가 v0.1 에 없음 → 사용자가 streaming 필요하면 vendor SDK 직접 호출해야 함 (gateway 우회). v0.2 에서 인터페이스에 추가 → breaking change 1회.
-- `Raw json.RawMessage` 노출은 vendor SDK 업데이트 시 응답 schema 변경 가능성 — 사용자가 직접 파싱하면 깨질 수 있음. README/doc 에 "Raw 는 debug 용, production 의존 금지" 명시 필요.
+- `Raw json.RawMessage` 노출은 vendor SDK 업데이트 시 응답 schema 변경 가능성. **포지셔닝:** Raw 는 *escape hatch* — 단순 디버그 hint 가 아니라, gateway 의 typed 표면이 아직 못 잡는 vendor 케이스 (tool_use 응답 처리, Anthropic safety 검사, prompt-caching token 집계 등) 의 합법적 production 통로. 다만 vendor 스키마는 gateway 의 semver 보장 밖이므로 **`Raw` 를 직접 파싱하는 코드는 "depend on vendor stability, not gateway stability"** 라는 별도 안정성 모델 — vendor SDK upgrade PR 마다 회귀 검증이 사용자 책임. v0.2+ 에서 자주 쓰이는 케이스는 typed surface 로 승격될 수 있다.
 - `ProviderError.Vendor()` 가 read-only accessor 라 직접 비교(`err.Vendor == "openai"`)는 컴파일 차단. 그러나 `if err.Vendor() == "openai"` 식으로 우회 가능 — 안티패턴이지만 doc 가이드만 가능. errors.Is + ErrorType 우선 사용 권장.
 - `ProviderError.Error()` 는 sanitized — `vendor / Type / StatusCode / Retriable` 만 포함. Vendor 원문은 `VendorMessage()` 로만 접근 가능 → `log.Error(err)` 한 줄로 vendor 내부 상태가 새는 케이스 차단. 단 debug 로그에 `VendorMessage()` 를 쓰는 코드는 직접 sanitize 한 후 외부 노출할 책임이 있음.
 - `MaxTokens *int` 의 nil 동작이 어댑터별로 갈림 — OpenAI 어댑터는 nil 을 vendor default 로 통과, Anthropic 어댑터는 생성자에서 설정한 fallback 으로 치환 (없으면 `ErrInvalidInput`). 같은 `ChatRequest` 가 provider 에 따라 성공/실패로 갈리는 케이스 → "uniform interface" 약속과 부분 충돌. **Failover 시나리오 주의:** OpenAI → Anthropic failover 중 `MaxTokens: nil` 이면 OpenAI 쪽은 정상이었더라도 Anthropic 어댑터 fallback 미설정 시 router 가 `ErrInvalidInput` 으로 abort — 가용성 손실. 권장 운영 패턴: Anthropic 어댑터 생성 시 `anthropic.WithDefaultMaxTokens(...)` 를 항상 명시.
@@ -412,7 +416,7 @@ func RequestIDFromContext(ctx context.Context) string {
 - [ ] Gemini 추가 시 (v0.2+) `ChatRequest` 어떤 필드가 추가될지 — 셋째 벤더가 패턴 검증.
 - [ ] Embedding 인터페이스 — `pkg/embedding/` 별 패키지로 빼는 게 모듈 경계상 맞을지 (Provider 와 분리).
 - [ ] `Content string` 의 multi-modal 표현 한계. v0.2+ 에서 `Content []Block` (Anthropic 스타일) 또는 `Content ContentUnion` 같은 typed union 으로 진화할지. v0.1 의 "lossless 양방향 변환" 주장은 텍스트-only 케이스 한정 — 멀티모달 도입 시 첫 가정이 무너지므로 v0.2 ADR 의 첫 항목.
-- [ ] Sentinel 4개 → N개 확장 트리거. 어떤 사용 사례가 등장하면 `ErrPermission` / `ErrInvalidInput` / `ErrNotFound` / `ErrServer` 를 sentinel 로 승격할지 기준.
+- [x] **(해결됨)** Sentinel 확장 트리거 기준 — Q5 reasoning 에 정의됨: *router 분기(retry/failover/abort)에 직접 쓰이는 시그널만 sentinel*. 새 카테고리가 등장하면 "router 가 이 에러로 분기하는가?" 한 질문에 답하고, YES 면 sentinel 추가, NO 면 `ErrorType` enum 만 추가.
 - [ ] Cache token 집계 — Anthropic 의 `cache_creation_input_tokens` / `cache_read_input_tokens` 가 `Usage` struct 에 없어서 정확한 prompt-caching 비용은 `Raw` 파싱 필요 ("Raw 는 debug 용" 원칙과 충돌). v0.2 에서 `Usage.CacheReadTokens *int` / `Usage.CacheWriteTokens *int` (nil = 미지원 vendor) 형태로 추가 검토. v0.1 의 cost metric 은 cache 미반영 (보수적 상한) 으로 운영.
 
 ---
