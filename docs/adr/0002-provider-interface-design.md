@@ -111,6 +111,10 @@ type Provider interface {
 
 type Role string
 
+// Note: there is intentionally no RoleSystem. Q2 routes the system prompt
+// through the top-level ChatRequest.System field — putting it back into
+// Messages with role="system" would reintroduce the Anthropic-incompatible
+// shape this ADR explicitly rejected.
 const (
     RoleUser      Role = "user"
     RoleAssistant Role = "assistant"
@@ -352,8 +356,8 @@ func RequestIDFromContext(ctx context.Context) string {
 ### Alt 4 — Q7 에서 동적 모델 검증 (vendor API 호출 + 캐시)
 
 - **장점:** `SupportsModel()` 가 hard-coded 목록이 아니라 vendor 의 진실 (`GET /v1/models`) 을 묻는다. 신규 모델 자동 지원, deprecate 자동 반영.
-- **단점:** Anthropic 은 public models 엔드포인트 없음 (2026-05 기준). 두 벤더 동일 패턴이 안 됨. 또한 cold start 마다 외부 호출은 SupportsModel 의 의도(빠른 라우팅 판단)와 어긋남.
-- **안 선택한 이유:** 벤더 불일치 + 호출 부담. 두 벤더 모두 models endpoint 갖추는 시점에 ADR 재방문.
+- **단점:** OpenAI/Anthropic 모두 `GET /v1/models` 를 제공하지만, 매 `SupportsModel()` 호출마다 외부 API 를 치면 라우팅 hot-path 에 cold-start latency + 외부 의존이 끼어든다 (Router 는 sub-ms 판단이 목표). 캐시를 두면 stale 처리·invalidation 정책이 또 다른 결정 사항이 되어 ADR-003 으로 미루기엔 부담.
+- **안 선택한 이유:** hot-path 외부 호출 회피. 캐시 도입은 별도 ADR 가치가 있을 만큼 큰 결정이므로 v0.1 인터페이스를 그것에 묶지 않는다. 사용자가 정말 동적 검증을 원하면 application layer 에서 `provider.Provider` 위에 `ModelLister` 래퍼를 직접 두면 된다 (interface 가 thin 해서 가능).
 
 ### Alt 5 — Q5 에서 `ProviderError.Vendor` 를 exported public field
 
@@ -378,7 +382,8 @@ func RequestIDFromContext(ctx context.Context) string {
 - `Raw json.RawMessage` 노출은 vendor SDK 업데이트 시 응답 schema 변경 가능성 — 사용자가 직접 파싱하면 깨질 수 있음. README/doc 에 "Raw 는 debug 용, production 의존 금지" 명시 필요.
 - `ProviderError.Vendor()` 가 read-only accessor 라 직접 비교(`err.Vendor == "openai"`)는 컴파일 차단. 그러나 `if err.Vendor() == "openai"` 식으로 우회 가능 — 안티패턴이지만 doc 가이드만 가능. errors.Is + ErrorType 우선 사용 권장.
 - `ProviderError.Error()` 는 sanitized — `vendor / Type / StatusCode / Retriable` 만 포함. Vendor 원문은 `VendorMessage()` 로만 접근 가능 → `log.Error(err)` 한 줄로 vendor 내부 상태가 새는 케이스 차단. 단 debug 로그에 `VendorMessage()` 를 쓰는 코드는 직접 sanitize 한 후 외부 노출할 책임이 있음.
-- `MaxTokens *int` 의 nil 동작이 어댑터별로 갈림 — OpenAI 어댑터는 nil 을 vendor default 로 통과, Anthropic 어댑터는 생성자에서 설정한 fallback 으로 치환 (없으면 `ErrInvalidInput`). 같은 `ChatRequest` 가 provider 에 따라 성공/실패로 갈리는 케이스가 가능 → "uniform interface" 약속과 부분 충돌. 권장 운영 패턴: Anthropic 어댑터 생성 시 `anthropic.WithDefaultMaxTokens(...)` 를 명시적으로 설정해서 fallback 동작을 코드에 박아두기.
+- `MaxTokens *int` 의 nil 동작이 어댑터별로 갈림 — OpenAI 어댑터는 nil 을 vendor default 로 통과, Anthropic 어댑터는 생성자에서 설정한 fallback 으로 치환 (없으면 `ErrInvalidInput`). 같은 `ChatRequest` 가 provider 에 따라 성공/실패로 갈리는 케이스 → "uniform interface" 약속과 부분 충돌. **Failover 시나리오 주의:** OpenAI → Anthropic failover 중 `MaxTokens: nil` 이면 OpenAI 쪽은 정상이었더라도 Anthropic 어댑터 fallback 미설정 시 router 가 `ErrInvalidInput` 으로 abort — 가용성 손실. 권장 운영 패턴: Anthropic 어댑터 생성 시 `anthropic.WithDefaultMaxTokens(...)` 를 항상 명시.
+- `FinishContentFilter` 비대칭 — OpenAI 어댑터만 이 값을 emit (Anthropic 의 stop_reason 에는 직접 대응 없음). safety 처리를 `FinishContentFilter` 로 분기하는 사용자 코드는 Anthropic 경로에서 silent miss. 통일이 필요한 사용 사례는 어댑터별 후처리 hook 또는 `Raw` 검사로 보완.
 - `Content string` 단일 필드 — image / document / tool_use 같은 multi-modal block 표현 불가. 해당 케이스는 `Raw` 로 fallback 강제 → 사용자 코드가 raw schema 학습해야 함. v0.2+ 의 typed content 모델 진화 시 breaking change 가능성.
 
 ### Risks
