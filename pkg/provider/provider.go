@@ -62,7 +62,7 @@ type ChatRequest struct {
 	// MaxTokens caps generation. nil means "use adapter-configured default";
 	// the OpenAI adapter passes nil through (vendor default applies) while
 	// the Anthropic adapter substitutes its configured fallback or returns
-	// ErrorTypeInvalidInput. See ADR-002 Q-β and Consequences/Negative.
+	// ErrorTypeInvalidInput. See ADR-002 Q2 and Consequences/Negative.
 	MaxTokens *int
 }
 
@@ -148,8 +148,15 @@ const (
 
 // ProviderError carries enough information for the router to choose retry,
 // failover, or abort without parsing vendor-specific strings. Construct via
-// NewProviderError — the unexported fields cannot be set from outside this
-// package, which is intentional (see ADR-002 Q5).
+// NewProviderError — the unexported vendor/message/wrapped fields cannot be
+// set from outside this package, which is intentional (see ADR-002 Q5).
+//
+// Note: external callers can still build a literal that sets only the
+// exported fields (Type / Retriable / StatusCode / RetryAfter), leaving
+// vendor/message/wrapped at zero values. NewProviderError is the contract;
+// the type system catches only the unexported fields. Adapter PRs should be
+// reviewed for this — if it shows up in practice, the next iteration moves
+// every field unexported and exposes accessors only.
 //
 // The name intentionally repeats the package: provider.Error would collide
 // with the built-in `error` interface in reader's heads, while ProviderError
