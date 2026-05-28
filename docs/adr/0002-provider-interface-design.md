@@ -65,7 +65,7 @@
 
 ### Q5. 에러 타입 (가장 중요)
 
-- **Decision:** C — `*ProviderError{Type, Retriable, RetryAfter, StatusCode, Message, vendor (unexported), Wrapped}` + sentinel errors (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout` — **router-critical 4개**).
+- **Decision:** C — `*ProviderError{Type, Retriable, RetryAfter, StatusCode, vendor (unexported), message (unexported), wrapped (unexported)}` + sentinel errors (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout` — **router-critical 4개**).
 - **Agent reasoning:** Router 가 retry / failover / abort 를 정확히 판단하려면 (1) 분류된 type (`Retriable bool` 포함), (2) router 분기에 직접 쓰이는 카테고리는 sentinel 로 `errors.Is(err, ErrRateLimited)` ergonomics. 단일 `error` (옵션 A) 면 call site 마다 string match 발생 — anti-Go. typed only (옵션 B) 면 sentinel ergonomics 없음. Anthropic 의 `overloaded_error` 같은 특유 시그널을 통일 enum 으로 카테고라이즈하는 가치가 있음.
   **Sentinel 4개로 한정한 이유:** rate_limit / overloaded / auth / timeout 은 router 가 분기 (retry vs failover vs abort) 에 직접 사용. 나머지 5개 카테고리 (`Permission`, `InvalidInput`, `NotFound`, `Server`, `Unknown`) 는 분류만 필요하고 분기 안 함 → 사용자는 `var pe *ProviderError; errors.As(err, &pe); pe.Type` 패턴으로 접근. sentinel 추가 시점은 실제 사용 사례 등장 시.
   **`RetryAfter *time.Duration`:** 벤더가 `Retry-After` 헤더로 보내는 backoff 힌트를 router 에 그대로 전달. Router 가 backoff duration 을 자체 추정하면 vendor 가 알려준 정확한 대기 시간을 버리는 손실 발생.
@@ -106,6 +106,12 @@ import (
 type Provider interface {
     Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
     Name() string
+
+    // SupportsModel reports whether this provider can serve the given model
+    // identifier. Router calls this before Chat() to pick a provider. Adapters
+    // MUST also enforce the contract at Chat() entry: if SupportsModel(req.Model)
+    // is false but Chat() is invoked anyway (e.g. direct caller, mock), return
+    // a *ProviderError with Type == ErrorTypeInvalidInput.
     SupportsModel(model string) bool
 }
 
@@ -407,6 +413,7 @@ func RequestIDFromContext(ctx context.Context) string {
 - [ ] Embedding 인터페이스 — `pkg/embedding/` 별 패키지로 빼는 게 모듈 경계상 맞을지 (Provider 와 분리).
 - [ ] `Content string` 의 multi-modal 표현 한계. v0.2+ 에서 `Content []Block` (Anthropic 스타일) 또는 `Content ContentUnion` 같은 typed union 으로 진화할지. v0.1 의 "lossless 양방향 변환" 주장은 텍스트-only 케이스 한정 — 멀티모달 도입 시 첫 가정이 무너지므로 v0.2 ADR 의 첫 항목.
 - [ ] Sentinel 4개 → N개 확장 트리거. 어떤 사용 사례가 등장하면 `ErrPermission` / `ErrInvalidInput` / `ErrNotFound` / `ErrServer` 를 sentinel 로 승격할지 기준.
+- [ ] Cache token 집계 — Anthropic 의 `cache_creation_input_tokens` / `cache_read_input_tokens` 가 `Usage` struct 에 없어서 정확한 prompt-caching 비용은 `Raw` 파싱 필요 ("Raw 는 debug 용" 원칙과 충돌). v0.2 에서 `Usage.CacheReadTokens *int` / `Usage.CacheWriteTokens *int` (nil = 미지원 vendor) 형태로 추가 검토. v0.1 의 cost metric 은 cache 미반영 (보수적 상한) 으로 운영.
 
 ---
 
