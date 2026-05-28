@@ -72,6 +72,7 @@ func TestProviderError_Is_RouterCriticalSentinels(t *testing.T) {
 		{"invalid_input does not match any sentinel", provider.ErrorTypeInvalidInput, provider.ErrRateLimited, false},
 		{"server does not match ErrOverloaded", provider.ErrorTypeServer, provider.ErrOverloaded, false},
 		{"unknown does not match any sentinel", provider.ErrorTypeUnknown, provider.ErrTimeout, false},
+		{"not_found does not match any sentinel", provider.ErrorTypeNotFound, provider.ErrRateLimited, false},
 	}
 
 	for _, tc := range cases {

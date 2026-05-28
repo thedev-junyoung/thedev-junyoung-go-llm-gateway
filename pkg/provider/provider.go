@@ -189,10 +189,11 @@ func (e *ProviderError) WithRetryAfter(d time.Duration) *ProviderError {
 	return e
 }
 
-// Vendor returns the vendor identifier. Read-only — keeping the field
-// unexported blocks the `if err.Vendor == "openai"` anti-pattern at compile
-// time (call sites that need vendor branching should use errors.Is/As + Type
-// instead).
+// Vendor returns the vendor identifier. Keeping the field unexported blocks
+// the direct-field anti-pattern (`if err.vendor == "openai"`) at compile
+// time, but `err.Vendor() == "openai"` still works at runtime — that path
+// is discouraged by convention, not by the type system. Call sites that need
+// to branch should use errors.Is for sentinels or errors.As + ErrorType.
 func (e *ProviderError) Vendor() string { return e.vendor }
 
 // VendorMessage returns the original vendor error message. Debug / log only
