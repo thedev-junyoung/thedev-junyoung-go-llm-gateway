@@ -109,4 +109,3 @@ func TestProviderError_RetryAfter_NilWhenAbsent(t *testing.T) {
 		t.Errorf("RetryAfter = %v, want nil (no WithRetryAfter call)", *err.RetryAfter)
 	}
 }
-
