@@ -371,3 +371,27 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 - [ ] Embedding 인터페이스 — `pkg/embedding/` 별 패키지로 빼는 게 모듈 경계상 맞을지 (Provider 와 분리).
 - [ ] `Content string` 의 multi-modal 표현 한계. v0.2+ 에서 `Content []Block` (Anthropic 스타일) 또는 `Content ContentUnion` 같은 typed union 으로 진화할지. v0.1 의 "lossless 양방향 변환" 주장은 텍스트-only 케이스 한정 — 멀티모달 도입 시 첫 가정이 무너지므로 v0.2 ADR 의 첫 항목.
 - [ ] Sentinel 4개 → N개 확장 트리거. 어떤 사용 사례가 등장하면 `ErrPermission` / `ErrInvalidInput` / `ErrNotFound` / `ErrServer` 를 sentinel 로 승격할지 기준.
+
+---
+
+## Related ADRs
+
+- [ADR-001 — Why a Go LLM gateway](0001-why-go-llm-gateway.md) — 본 라이브러리의 존재 이유와 시장 배경. 본 ADR 의 모든 결정은 ADR-001 이 정한 "production-grade Go gateway" 라는 정체성 위에서 정당화된다.
+- **ADR-003 (예정) — 모델명 매핑 전략** — `gpt-4o` / `claude-opus-4-7` 같은 모델 식별자가 어느 provider 로 라우팅될지 결정. 본 ADR 의 Q4 (`Model string`) + Q7 (`SupportsModel`) 가 식별/판별을 담당하고, ADR-003 은 매핑 정책을 담당한다.
+- **ADR-004+ (예정)** — Failover trigger 조건 (Q5 의 sentinel 4개 + `Retriable` 활용), Distributed rate limit (Q6 의 request id 와 metric 연계), Observability (Q5 의 `ProviderError.Vendor()` 와 cost 계산).
+
+## References
+
+### Internal
+- [docs/design/architecture.md](../design/architecture.md) — 본 ADR 의 Q6 (request id 위치) 결정 근거가 된 모듈 경계 규칙.
+- [docs/design/v0.1-scope.md](../design/v0.1-scope.md) — v0.1 의 In-scope / Out-of-scope. 본 ADR 의 "v0.1 에는 안 넣음" 결정들의 출처.
+- [docs/workflow/agent-driven-development.md](../workflow/agent-driven-development.md) — 본 ADR draft 가 agent-drafted 인 이유와 maintainer voice 룰의 출처.
+
+### External (vendor docs)
+- OpenAI Chat Completions API — `https://platform.openai.com/docs/api-reference/chat`
+- Anthropic Messages API — `https://docs.anthropic.com/en/api/messages`
+
+### Prior art (해결 사례)
+- [LiteLLM (Python)](https://github.com/BerriAI/litellm) — 본 ADR 의 통합 인터페이스 모양 비교 기준.
+- [OpenRouter](https://openrouter.ai/) — multi-provider 라우팅의 SaaS 모델 (본 ADR 은 라이브러리 모델 선택).
+- [Portkey Gateway](https://github.com/Portkey-AI/gateway), [Helicone](https://github.com/Helicone/helicone) — 인접 영역의 design choice 참고.
