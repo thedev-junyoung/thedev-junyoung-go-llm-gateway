@@ -15,7 +15,7 @@
 - [x] `go mod init github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway` — 2026-05-20
 - [x] CI 골격: `go test ./...` + `golangci-lint` + Dependabot (`#20, #30, #32`)
 - [x] README RDD — API 가 어떻게 쓰일지 보이는 코드 예시 완성 — 2026-05-20
-- [⏳] ADR-002 — Provider 인터페이스 설계 결정 (PR `#34`, 본인 voice 채우는 중)
+- [ ] ADR-002 — Provider 인터페이스 설계 결정 (⏳ PR `#34`, 본인 voice 채우는 중)
 
 **Deliverable:** repo public + README + ADR 2편 + CI green
 **Status:** ADR-002 Status `Proposed → Accepted` 전환 + PR `#34` 머지 완료 시 Week 0 공식 종료. 그 외 작업은 모두 main 머지됨.
