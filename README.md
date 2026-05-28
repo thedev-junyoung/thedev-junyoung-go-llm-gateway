@@ -21,34 +21,84 @@ Today, every Go team writes this from scratch. This project ships it as a librar
 
 ---
 
-## Quick example (planned v0.1 API)
+## Quick example
+
+The `Provider` contract and vendor-neutral types are stable as of v0.1.0-rc; the gateway-level composition (`gateway.New`, failover policy, rate limit, metrics) is being built and may shift until the v0.1.0 tag.
 
 ```go
-gw, err := gateway.New(gateway.Config{
-    Providers: []gateway.Provider{
-        openai.New(os.Getenv("OPENAI_API_KEY")),
-        anthropic.New(os.Getenv("ANTHROPIC_API_KEY")),
-    },
-    Routing: gateway.FailoverPolicy{
-        Primary:   "openai",
-        Fallbacks: []string{"anthropic"},
-        Triggers:  gateway.OnTimeout | gateway.On5xx,
-    },
-    RateLimit: gateway.RedisRateLimit{
-        Client:         redisClient,
-        RequestsPerMin: 100,
-        TokensPerMin:   50_000,
-    },
-    Metrics: gateway.PrometheusMetrics(prometheus.DefaultRegisterer),
-})
+import (
+    "context"
+    "errors"
+    "log/slog"
+    "os"
+    "time"
 
-resp, err := gw.Chat(ctx, gateway.ChatRequest{
-    Model:    "gpt-4o", // automatically mapped to the active provider
-    Messages: []gateway.Message{{Role: "user", Content: "Hello"}},
-})
+    gateway "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway"
+    "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider"
+    // adapter packages land in follow-up PRs (#42 OpenAI, #43 Anthropic):
+    // "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider/openai"
+    // "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider/anthropic"
+)
+
+func main() {
+    gw, err := gateway.New(gateway.Config{
+        Providers: []provider.Provider{
+            openai.New(os.Getenv("OPENAI_API_KEY")),
+            anthropic.New(os.Getenv("ANTHROPIC_API_KEY"),
+                anthropic.WithDefaultMaxTokens(4096)), // ADR-002 Q2: Anthropic requires max_tokens
+        },
+        Routing: gateway.FailoverPolicy{
+            Primary:   "openai",
+            Fallbacks: []string{"anthropic"},
+            Triggers:  gateway.OnTimeout | gateway.On5xx,
+        },
+        RateLimit: gateway.RedisRateLimit{
+            Client:         redisClient,
+            RequestsPerMin: 100,
+            TokensPerMin:   50_000,
+        },
+        Metrics: gateway.PrometheusMetrics(prometheus.DefaultRegisterer),
+    })
+    if err != nil { /* ... */ }
+
+    ctx := gateway.WithRequestID(context.Background(), "req_01HXYZ")
+
+    resp, err := gw.Chat(ctx, provider.ChatRequest{
+        Model:    "gpt-4o", // router maps the model id to the active provider
+        System:   "You are a terse assistant.",
+        Messages: []provider.Message{
+            {Role: provider.RoleUser, Content: "Hello"},
+        },
+    })
+
+    // Router-critical sentinels enable standard errors.Is checks.
+    switch {
+    case errors.Is(err, provider.ErrRateLimited):
+        var pe *provider.ProviderError
+        if errors.As(err, &pe) && pe.RetryAfter != nil {
+            time.Sleep(*pe.RetryAfter)
+        }
+    case errors.Is(err, provider.ErrOverloaded), errors.Is(err, provider.ErrTimeout):
+        // already retried + failed over by the router; surface to caller
+    case err != nil:
+        slog.Error("chat failed", "err", err)
+        return
+    }
+
+    slog.Info("ok", "tokens_out", resp.Usage.OutputTokens, "finish", resp.FinishReason)
+    _ = resp.Content
+}
 ```
 
-API is illustrative — final shape will land via ADR-002.
+Stable in v0.1.0-rc (PR #40 / ADR-002):
+- `provider.Provider`, `provider.ChatRequest`, `provider.ChatResponse`, `provider.Usage`
+- `provider.FinishReason` constants (`FinishStop`, `FinishLength`, `FinishContentFilter`, `FinishStopSequence`, `FinishToolUse`, `FinishUnknown`)
+- `provider.ProviderError` + the four router-critical sentinels (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout`)
+- `gateway.WithRequestID` / `gateway.RequestIDFromContext`
+
+Coming up (still mutating):
+- `pkg/provider/openai`, `pkg/provider/anthropic` adapters
+- `gateway.New`, `gateway.Config`, `FailoverPolicy`, `RedisRateLimit`, `PrometheusMetrics`
 
 ---
 
@@ -68,7 +118,7 @@ Out of v0.1: semantic cache, streaming, embedding APIs, Gemini/Bedrock/Vertex, H
 - [Design — v0.1 scope](docs/design/v0.1-scope.md)
 - [Design — Architecture diagram](docs/design/architecture.md)
 - [ADR-001 — Why a Go LLM gateway](docs/adr/0001-why-go-llm-gateway.md)
-- [ADR-002 — Provider interface design](docs/adr/0002-provider-interface-design.md) *(draft)*
+- [ADR-002 — Provider interface design](docs/adr/0002-provider-interface-design.md)
 - [Roadmap](docs/roadmap.md)
 - [Agent-driven development rules](docs/workflow/agent-driven-development.md)
 
