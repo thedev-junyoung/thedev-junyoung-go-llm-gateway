@@ -35,7 +35,7 @@ import (
 
     gateway "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway"
     "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider"
-    // adapter packages land in follow-up PRs (#42 OpenAI, #43 Anthropic):
+    // adapter packages land in follow-up PRs (OpenAI adapter, Anthropic adapter):
     // "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider/openai"
     // "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider/anthropic"
 )
