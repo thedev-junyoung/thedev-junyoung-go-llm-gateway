@@ -238,3 +238,8 @@ var (
 	ErrAuthFailed  = errors.New("provider: authentication failed")
 	ErrTimeout     = errors.New("provider: timeout")
 )
+
+// Compile-time assertion that *ProviderError satisfies the error interface.
+// Placed in provider.go (not _test.go) so `go build` — not just `go test` —
+// catches accidental removal of the Error() method during maintenance.
+var _ error = (*ProviderError)(nil)

@@ -110,9 +110,3 @@ func TestProviderError_RetryAfter_NilWhenAbsent(t *testing.T) {
 	}
 }
 
-// Compile-time assertion that *ProviderError satisfies the error interface
-// and is usable with errors.Is / errors.As. This catches accidental signature
-// drift in maintenance.
-var (
-	_ error = (*provider.ProviderError)(nil)
-)
