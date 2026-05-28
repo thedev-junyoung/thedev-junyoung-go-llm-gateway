@@ -98,6 +98,7 @@ import (
     "context"
     "encoding/json"
     "errors"
+    "fmt"
     "time"
 )
 
@@ -135,14 +136,24 @@ type FinishReason string
 const (
     FinishStop          FinishReason = "stop"           // natural end_turn / stop
     FinishLength        FinishReason = "length"          // max_tokens reached
-    FinishContentFilter FinishReason = "content_filter"  // safety block (OpenAI; Anthropic has no direct equivalent)
-    FinishStopSequence  FinishReason = "stop_sequence"   // hit a configured stop sequence
+    FinishContentFilter FinishReason = "content_filter"  // safety block. OpenAI emits this directly via finish_reason.
+                                                          // Anthropic's stop_reason has no direct equivalent — adapter
+                                                          // MUST emit FinishStop (vendor may signal safety in Raw).
+    FinishStopSequence  FinishReason = "stop_sequence"   // hit a configured stop sequence. Anthropic-only signal —
+                                                          // OpenAI's finish_reason "stop" covers both natural end and
+                                                          // stop-sequence hits and is mapped to FinishStop. Documented
+                                                          // asymmetry, not a bug; callers needing the distinction must
+                                                          // run on Anthropic.
     FinishToolUse       FinishReason = "tool_use"        // model wants to invoke a tool.
                                                           // v0.1 exposes the *signal* only; there is no typed
                                                           // tool-calling interface yet. Callers receiving this
                                                           // value must parse `ChatResponse.Raw` themselves to
                                                           // extract the tool_use block. A typed tool-calling
                                                           // surface is deferred to v0.2 (see Open Questions).
+    FinishUnknown       FinishReason = "unknown"          // vendor emitted a finish/stop reason this gateway version
+                                                          // does not recognize. Adapters MUST emit this rather than
+                                                          // panicking or silently coercing to FinishStop; callers
+                                                          // MAY treat as best-effort success and inspect Raw.
 )
 
 type Usage struct {
@@ -180,21 +191,32 @@ type ProviderError struct {
     Retriable  bool
     RetryAfter *time.Duration // vendor-provided backoff hint (e.g. Retry-After header); nil if absent
     StatusCode int
-    Message    string
-    Wrapped    error
 
-    // vendor is unexported on purpose: read via Vendor() to prevent
-    // `if err.Vendor == "openai"` abstraction leaks at call sites.
-    vendor string
+    // vendor and message are unexported on purpose:
+    //   - vendor: prevent `if err.Vendor == "openai"` abstraction leaks at call sites
+    //   - message: keep raw vendor strings out of default Error() — they may
+    //     contain internal state and must not flow into HTTP responses.
+    // Both are reachable via dedicated accessors for logging/debug paths.
+    vendor  string
+    message string
+    wrapped error
 }
 
 func (e *ProviderError) Vendor() string { return e.vendor }
 
+// VendorMessage returns the original vendor error message. Debug / log only —
+// MUST NOT be returned verbatim to external clients (may leak internal state).
+func (e *ProviderError) VendorMessage() string { return e.message }
+
+// Error returns a sanitized representation safe to surface in default logging.
+// It deliberately omits the vendor's raw message; use VendorMessage() if you
+// need that and have a sanitization path.
 func (e *ProviderError) Error() string {
-    return e.vendor + ": " + string(e.Type) + ": " + e.Message
+    return fmt.Sprintf("provider %s: %s (status=%d, retriable=%t)",
+        e.vendor, e.Type, e.StatusCode, e.Retriable)
 }
 
-func (e *ProviderError) Unwrap() error { return e.Wrapped }
+func (e *ProviderError) Unwrap() error { return e.wrapped }
 
 // NewProviderError is the constructor adapter packages (pkg/provider/openai,
 // pkg/provider/anthropic, ...) MUST use — the unexported `vendor` field cannot
@@ -204,9 +226,9 @@ func NewProviderError(vendor string, t ErrorType, statusCode int, retriable bool
         Type:       t,
         Retriable:  retriable,
         StatusCode: statusCode,
-        Message:    msg,
-        Wrapped:    wrapped,
         vendor:     vendor,
+        message:    msg,
+        wrapped:    wrapped,
     }
 }
 
@@ -293,6 +315,14 @@ import (
 func WithRequestID(ctx context.Context, id string) context.Context {
     return requestctx.With(ctx, id)
 }
+
+// RequestIDFromContext returns the request id previously set with
+// WithRequestID, or "" if none. External code (custom loggers/tracers)
+// reads through this accessor — `internal/requestctx` is not importable
+// from outside the module.
+func RequestIDFromContext(ctx context.Context) string {
+    return requestctx.From(ctx)
+}
 ```
 
 > **Note for maintainer:** 이 시그니처가 `README.md` 의 "Quick example" 과 일치하는지 본인 review 시 확인. 불일치 시 README 도 같은 PR 또는 후속 PR 로 업데이트.
@@ -347,7 +377,8 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 - Stream/Embed 가 v0.1 에 없음 → 사용자가 streaming 필요하면 vendor SDK 직접 호출해야 함 (gateway 우회). v0.2 에서 인터페이스에 추가 → breaking change 1회.
 - `Raw json.RawMessage` 노출은 vendor SDK 업데이트 시 응답 schema 변경 가능성 — 사용자가 직접 파싱하면 깨질 수 있음. README/doc 에 "Raw 는 debug 용, production 의존 금지" 명시 필요.
 - `ProviderError.Vendor()` 가 read-only accessor 라 직접 비교(`err.Vendor == "openai"`)는 컴파일 차단. 그러나 `if err.Vendor() == "openai"` 식으로 우회 가능 — 안티패턴이지만 doc 가이드만 가능. errors.Is + ErrorType 우선 사용 권장.
-- `ProviderError.Error()` 가 `Message` (vendor 원문) 를 포함 → HTTP 응답 body 로 그대로 흘러가면 vendor 내부 상태 노출 가능. **Gateway layer 는 외부 클라이언트에 `Error()` 문자열을 직접 노출하지 말 것; `ErrorType` 만 매핑해서 반환** (예: HTTP 코드 + sanitized message).
+- `ProviderError.Error()` 는 sanitized — `vendor / Type / StatusCode / Retriable` 만 포함. Vendor 원문은 `VendorMessage()` 로만 접근 가능 → `log.Error(err)` 한 줄로 vendor 내부 상태가 새는 케이스 차단. 단 debug 로그에 `VendorMessage()` 를 쓰는 코드는 직접 sanitize 한 후 외부 노출할 책임이 있음.
+- `MaxTokens *int` 의 nil 동작이 어댑터별로 갈림 — OpenAI 어댑터는 nil 을 vendor default 로 통과, Anthropic 어댑터는 생성자에서 설정한 fallback 으로 치환 (없으면 `ErrInvalidInput`). 같은 `ChatRequest` 가 provider 에 따라 성공/실패로 갈리는 케이스가 가능 → "uniform interface" 약속과 부분 충돌. 권장 운영 패턴: Anthropic 어댑터 생성 시 `anthropic.WithDefaultMaxTokens(...)` 를 명시적으로 설정해서 fallback 동작을 코드에 박아두기.
 - `Content string` 단일 필드 — image / document / tool_use 같은 multi-modal block 표현 불가. 해당 케이스는 `Raw` 로 fallback 강제 → 사용자 코드가 raw schema 학습해야 함. v0.2+ 의 typed content 모델 진화 시 breaking change 가능성.
 
 ### Risks
