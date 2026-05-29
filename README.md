@@ -42,22 +42,19 @@ import (
 
 func main() {
     gw, err := gateway.New(gateway.Config{
+        // Providers slice order IS the priority: for a given model, the
+        // first provider whose SupportsModel(model)==true serves the
+        // request (see ADR-003). No separate Primary field.
         Providers: []provider.Provider{
             openai.New(os.Getenv("OPENAI_API_KEY")),
             anthropic.New(os.Getenv("ANTHROPIC_API_KEY"),
                 anthropic.WithDefaultMaxTokens(4096)), // ADR-002 Q2: Anthropic requires max_tokens
         },
-        Routing: gateway.FailoverPolicy{
-            Primary:   "openai",
-            Fallbacks: []string{"anthropic"},
-            Triggers:  gateway.OnTimeout | gateway.On5xx,
-        },
-        RateLimit: gateway.RedisRateLimit{
-            Client:         redisClient,
-            RequestsPerMin: 100,
-            TokensPerMin:   50_000,
-        },
-        Metrics: gateway.PrometheusMetrics(prometheus.DefaultRegisterer),
+
+        // Failover trigger policy (ADR-004), RateLimit (Week 4), and
+        // Metrics/Logging (Week 5) wiring will arrive as additional
+        // non-breaking Config fields. v0.1.0-rc is single-provider
+        // passthrough only — adapter Chat errors propagate as-is.
     })
     if err != nil { /* ... */ }
 
@@ -90,15 +87,18 @@ func main() {
 }
 ```
 
-Stable in v0.1.0-rc (PR #40 / ADR-002):
-- `provider.Provider`, `provider.ChatRequest`, `provider.ChatResponse`, `provider.Usage`
+Stable in v0.1.0-rc:
+- `provider.Provider`, `provider.ChatRequest`, `provider.ChatResponse`, `provider.Usage` (ADR-002 / PR #40)
 - `provider.FinishReason` constants (`FinishStop`, `FinishLength`, `FinishContentFilter`, `FinishStopSequence`, `FinishToolUse`, `FinishUnknown`)
 - `provider.ProviderError` + the four router-critical sentinels (`ErrRateLimited`, `ErrOverloaded`, `ErrAuthFailed`, `ErrTimeout`)
+- `pkg/provider/openai`, `pkg/provider/anthropic` adapters (PR #45, #47)
+- `pkg/router.Pick`, `pkg/router.PickWithFallbacks` (ADR-003 / PR #53)
+- `gateway.Config{Providers}`, `gateway.New`, `Gateway.Chat`, `gateway.ErrNoProviders`
 - `gateway.WithRequestID` / `gateway.RequestIDFromContext`
 
 Coming up (still mutating):
-- `pkg/provider/openai`, `pkg/provider/anthropic` adapters
-- `gateway.New`, `gateway.Config`, `FailoverPolicy`, `RedisRateLimit`, `PrometheusMetrics`
+- Failover policy fields on `gateway.Config` (ADR-004, Week 3)
+- `RedisRateLimit` (Week 4), `PrometheusMetrics` / `slog` wiring (Week 5)
 
 ---
 
