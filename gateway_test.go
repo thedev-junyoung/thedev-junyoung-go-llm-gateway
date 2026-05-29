@@ -271,7 +271,10 @@ func TestChat_Failover_AllRetriable_ReturnsLastError(t *testing.T) {
 		t.Errorf("errors.Is(err, ErrOverloaded) = false, want true (azure's error is the last)")
 	}
 	var pe *provider.ProviderError
-	if !errors.As(err, &pe) || pe.Vendor() != "azure-openai" {
+	if !errors.As(err, &pe) {
+		t.Fatalf("err is not *ProviderError: %v", err)
+	}
+	if pe.Vendor() != "azure-openai" {
 		t.Errorf("vendor of last error = %q, want %q", pe.Vendor(), "azure-openai")
 	}
 }
