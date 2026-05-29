@@ -39,7 +39,7 @@ ADR-002 가 `Provider` 인터페이스와 `SupportsModel(model string) bool` 메
 
 ### Q3. 모델 미지원 (어느 provider 도 `SupportsModel(m) == false`)
 
-- **Decision:** A — **`Chat()` 즉시 `*ProviderError{Type: ErrorTypeInvalidInput, vendor: "gateway"}` 반환**.
+- **Decision:** A — **`Chat()` 즉시 `provider.NewProviderError("gateway", provider.ErrorTypeInvalidInput, 0, false, ...)` 반환** (`err.Vendor() == "gateway"`).
 - **Agent reasoning:** 명시적 실패가 silent vendor reject 보다 디버깅 쉬움. Q3=B (primary 에게 떠넘김) 면 OpenAI 의 `"claude-opus-4-7"` 호출이 NotFound 로 reject 되어 사용자가 "왜 routing 실패가 아니라 vendor 404 지?" 혼란. 새 sentinel (`ErrModelUnsupported`) 도입 (Q3=C) 까지는 안 함 — 기존 `ErrorTypeInvalidInput` 카테고리가 충분히 의미 전달. error 의 `Vendor()` 는 `"gateway"` (origin 이 router 임을 표시).
 - **Maintainer note:** <!-- TODO: 본인 한 줄 voice 로 -->
 
