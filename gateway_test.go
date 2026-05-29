@@ -3,6 +3,7 @@ package gateway_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	gateway "github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway"
@@ -58,6 +59,22 @@ func TestNew_EmptyProviders_ReturnsErrNoProviders(t *testing.T) {
 	}
 }
 
+func TestNew_NilProviderInSlice_Rejected(t *testing.T) {
+	t.Parallel()
+
+	p := newFake("openai", []string{"gpt-4o"}, nil)
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{p, nil}})
+	if err == nil {
+		t.Fatal("err = nil, want non-nil for nil-provider entry")
+	}
+	if gw != nil {
+		t.Error("Gateway is not nil on error")
+	}
+	if !strings.Contains(err.Error(), "Providers[1]") {
+		t.Errorf("err = %q, want it to identify the offending index (Providers[1])", err)
+	}
+}
+
 func TestNew_WithProviders_Succeeds(t *testing.T) {
 	t.Parallel()
 
@@ -110,9 +127,12 @@ func TestChat_UnsupportedModel_ReturnsGatewayInvalidInput(t *testing.T) {
 	t.Parallel()
 
 	p := newFake("openai", []string{"gpt-4o"}, nil)
-	gw, _ := gateway.New(gateway.Config{Providers: []provider.Provider{p}})
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{p}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
 
-	_, err := gw.Chat(context.Background(), provider.ChatRequest{
+	_, err = gw.Chat(context.Background(), provider.ChatRequest{
 		Model:    "gemini-2.0-pro",
 		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
 	})
@@ -140,8 +160,11 @@ func TestChat_ProviderError_PropagatesVerbatim(t *testing.T) {
 			return provider.ChatResponse{}, rateLimited
 		})
 
-	gw, _ := gateway.New(gateway.Config{Providers: []provider.Provider{p}})
-	_, err := gw.Chat(context.Background(), provider.ChatRequest{
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{p}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+	_, err = gw.Chat(context.Background(), provider.ChatRequest{
 		Model:    "gpt-4o",
 		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
 	})

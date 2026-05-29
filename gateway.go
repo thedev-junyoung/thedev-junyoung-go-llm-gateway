@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider"
 	"github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/router"
@@ -31,10 +32,17 @@ type Gateway struct {
 // ErrNoProviders is returned by New when Config.Providers is empty.
 var ErrNoProviders = errors.New("gateway: Config.Providers must contain at least one provider")
 
-// New validates the config and returns a ready Gateway.
+// New validates the config and returns a ready Gateway. Rejects an empty
+// Providers slice and rejects nil entries within it — both would surface
+// later as nil-deref panics inside router.Pick / Provider.Chat.
 func New(cfg Config) (*Gateway, error) {
 	if len(cfg.Providers) == 0 {
 		return nil, ErrNoProviders
+	}
+	for i, p := range cfg.Providers {
+		if p == nil {
+			return nil, fmt.Errorf("gateway: Config.Providers[%d] is nil", i)
+		}
 	}
 	return &Gateway{providers: cfg.Providers}, nil
 }
