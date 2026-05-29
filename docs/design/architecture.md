@@ -4,7 +4,7 @@
 
 ## 컴포넌트 의존 관계
 
-최상위 `gateway` 패키지가 **composition root** 다. 어떤 `pkg/*` 도 다른 `pkg/*` 를 모른다. `internal/testutil` 은 `_test.go` 파일에서만 import 된다.
+최상위 `gateway` 패키지가 **composition root** 다. peer feature 패키지 (`router` / `ratelimit` / `metrics` / `logging`) 는 서로를 모른다. 단 `pkg/provider` 는 base interface layer 라서 위 peer 들이 한쪽 방향으로 의존한다. `internal/testutil` 은 `_test.go` 파일에서만 import 된다.
 
 ```mermaid
 flowchart TB
@@ -31,6 +31,10 @@ flowchart TB
     GW --> RL
     GW --> MT
     GW --> LG
+
+    RT --> IF
+    RL --> IF
+    MT --> IF
 
     TU -. test only .-> IF
     TU -. test only .-> RT
