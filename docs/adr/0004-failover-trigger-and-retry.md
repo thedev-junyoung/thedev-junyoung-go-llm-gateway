@@ -80,6 +80,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/provider"
 	"github.com/thedev-junyoung/thedev-junyoung-go-llm-gateway/pkg/router"
@@ -97,9 +98,13 @@ func (g *Gateway) Chat(ctx context.Context, req provider.ChatRequest) (provider.
 	var lastErr error
 	for i, p := range candidates {
 		// Caller's context wins — abort before next attempt if cancelled.
+		// Dual-wrap (Go 1.20+) preserves BOTH the ctx error and the most
+		// recent vendor error so callers can errors.Is for either:
+		//   errors.Is(err, context.Canceled)         // detect cancellation
+		//   errors.Is(err, provider.ErrRateLimited)  // why we stopped
 		if cerr := ctx.Err(); cerr != nil {
 			if lastErr != nil {
-				return provider.ChatResponse{}, lastErr // preserve vendor error over ctx noise
+				return provider.ChatResponse{}, fmt.Errorf("%w: last vendor error: %w", cerr, lastErr)
 			}
 			return provider.ChatResponse{}, cerr
 		}
