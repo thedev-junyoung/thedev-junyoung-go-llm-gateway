@@ -152,8 +152,8 @@ func TestChat_UnsupportedModel_ReturnsGatewayInvalidInput(t *testing.T) {
 func TestChat_ProviderError_PropagatesVerbatim(t *testing.T) {
 	t.Parallel()
 
-	// Adapter returns a rate-limit error. v0.1 has no failover, so the
-	// caller sees the vendor's error directly — sentinel still works.
+	// Single-provider chain: the failover loop exhausts the only candidate
+	// and surfaces the (retriable) vendor error. Sentinel survives.
 	rateLimited := provider.NewProviderError("openai", provider.ErrorTypeRateLimit, 429, true, "slow down", nil)
 	p := newFake("openai", []string{"gpt-4o"},
 		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
@@ -170,6 +170,183 @@ func TestChat_ProviderError_PropagatesVerbatim(t *testing.T) {
 	})
 
 	if !errors.Is(err, provider.ErrRateLimited) {
-		t.Errorf("errors.Is(err, ErrRateLimited) = false, want true (sentinel must survive passthrough)")
+		t.Errorf("errors.Is(err, ErrRateLimited) = false, want true (sentinel must survive failover)")
+	}
+}
+
+func TestChat_Failover_PrimaryRetriable_FallbackSucceeds(t *testing.T) {
+	t.Parallel()
+
+	primaryCalls, fallbackCalls := 0, 0
+	primary := newFake("openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			primaryCalls++
+			return provider.ChatResponse{}, provider.NewProviderError(
+				"openai", provider.ErrorTypeRateLimit, 429, true, "throttled", nil)
+		})
+	fallback := newFake("azure-openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			fallbackCalls++
+			return provider.ChatResponse{Content: "from azure", FinishReason: provider.FinishStop}, nil
+		})
+
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{primary, fallback}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+
+	resp, err := gw.Chat(context.Background(), provider.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat err = %v, want nil (fallback should succeed)", err)
+	}
+	if resp.Content != "from azure" {
+		t.Errorf("Content = %q, want %q", resp.Content, "from azure")
+	}
+	if primaryCalls != 1 || fallbackCalls != 1 {
+		t.Errorf("call counts = (primary=%d, fallback=%d), want (1, 1)", primaryCalls, fallbackCalls)
+	}
+}
+
+func TestChat_Failover_NonRetriable_AbortsImmediately(t *testing.T) {
+	t.Parallel()
+
+	primaryCalls, fallbackCalls := 0, 0
+	primary := newFake("openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			primaryCalls++
+			return provider.ChatResponse{}, provider.NewProviderError(
+				"openai", provider.ErrorTypeAuth, 401, false, "bad key", nil)
+		})
+	fallback := newFake("azure-openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			fallbackCalls++
+			return provider.ChatResponse{Content: "wont reach"}, nil
+		})
+
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{primary, fallback}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+	_, err = gw.Chat(context.Background(), provider.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+
+	if !errors.Is(err, provider.ErrAuthFailed) {
+		t.Errorf("errors.Is(err, ErrAuthFailed) = false, want true")
+	}
+	if primaryCalls != 1 || fallbackCalls != 0 {
+		t.Errorf("call counts = (primary=%d, fallback=%d), want (1, 0) — non-retriable MUST NOT fail over", primaryCalls, fallbackCalls)
+	}
+}
+
+func TestChat_Failover_AllRetriable_ReturnsLastError(t *testing.T) {
+	t.Parallel()
+
+	primary := newFake("openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			return provider.ChatResponse{}, provider.NewProviderError(
+				"openai", provider.ErrorTypeRateLimit, 429, true, "limit", nil)
+		})
+	fallback := newFake("azure-openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			return provider.ChatResponse{}, provider.NewProviderError(
+				"azure-openai", provider.ErrorTypeOverloaded, 503, true, "down", nil)
+		})
+
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{primary, fallback}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+	_, err = gw.Chat(context.Background(), provider.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+
+	// Last error wins (azure-openai overloaded).
+	if !errors.Is(err, provider.ErrOverloaded) {
+		t.Errorf("errors.Is(err, ErrOverloaded) = false, want true (azure's error is the last)")
+	}
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) || pe.Vendor() != "azure-openai" {
+		t.Errorf("vendor of last error = %q, want %q", pe.Vendor(), "azure-openai")
+	}
+}
+
+func TestChat_Failover_UnknownErrorType_NoFailover(t *testing.T) {
+	t.Parallel()
+
+	// Bare error (not *ProviderError) usually means a gateway-side defect.
+	// Don't launder it through every vendor — abort.
+	bareErr := errors.New("something exploded internally")
+	primaryCalls, fallbackCalls := 0, 0
+	primary := newFake("openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			primaryCalls++
+			return provider.ChatResponse{}, bareErr
+		})
+	fallback := newFake("azure-openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			fallbackCalls++
+			return provider.ChatResponse{}, nil
+		})
+
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{primary, fallback}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+	_, err = gw.Chat(context.Background(), provider.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+
+	if !errors.Is(err, bareErr) {
+		t.Errorf("err mismatch: got %v, want bareErr to propagate verbatim", err)
+	}
+	if primaryCalls != 1 || fallbackCalls != 0 {
+		t.Errorf("call counts = (primary=%d, fallback=%d), want (1, 0) — unknown error MUST NOT fail over", primaryCalls, fallbackCalls)
+	}
+}
+
+func TestChat_Failover_CtxCancelMidLoop_DualWrap(t *testing.T) {
+	t.Parallel()
+
+	// Primary returns retriable; the closure also cancels ctx so the loop's
+	// next iteration aborts before fallback is tried. Caller must be able to
+	// errors.Is for BOTH the ctx cause AND the vendor sentinel (Go 1.20+ %w).
+	ctx, cancel := context.WithCancel(context.Background())
+	primary := newFake("openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			cancel()
+			return provider.ChatResponse{}, provider.NewProviderError(
+				"openai", provider.ErrorTypeRateLimit, 429, true, "throttled", nil)
+		})
+	fallbackCalls := 0
+	fallback := newFake("azure-openai", []string{"gpt-4o"},
+		func(_ context.Context, _ provider.ChatRequest) (provider.ChatResponse, error) {
+			fallbackCalls++
+			return provider.ChatResponse{}, nil
+		})
+
+	gw, err := gateway.New(gateway.Config{Providers: []provider.Provider{primary, fallback}})
+	if err != nil {
+		t.Fatalf("New err = %v", err)
+	}
+	_, err = gw.Chat(ctx, provider.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Error("errors.Is(err, context.Canceled) = false, want true")
+	}
+	if !errors.Is(err, provider.ErrRateLimited) {
+		t.Error("errors.Is(err, ErrRateLimited) = false, want true (last vendor error preserved)")
+	}
+	if fallbackCalls != 0 {
+		t.Errorf("fallbackCalls = %d, want 0 (ctx cancelled before fallback try)", fallbackCalls)
 	}
 }

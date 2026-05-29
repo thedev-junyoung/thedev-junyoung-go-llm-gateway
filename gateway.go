@@ -11,9 +11,11 @@ import (
 
 // Config configures a Gateway. Only Providers is required in v0.1.
 //
-// Failover policy, rate limiting, metrics, and logging fields will be added
-// in subsequent ADRs (ADR-004 onward) as non-breaking struct additions —
-// today this single-provider passthrough is the floor.
+// Failover trigger conditions are fixed by ADR-004 (every Retriable=true
+// *ProviderError triggers a switch to the next supporting provider, no
+// in-provider retry, no inter-attempt backoff, caller's ctx is the only
+// time budget). RateLimit / Metrics / Logging fields will be added later
+// as non-breaking struct additions.
 type Config struct {
 	// Providers is the ordered set of vendor adapters. The slice order IS the
 	// priority — for a given model, the first provider whose SupportsModel
@@ -47,17 +49,68 @@ func New(cfg Config) (*Gateway, error) {
 	return &Gateway{providers: cfg.Providers}, nil
 }
 
-// Chat routes the request to the first provider that supports req.Model
-// (per ADR-003) and returns its response.
+// Chat routes the request through the candidate chain returned by the
+// router and applies the ADR-004 failover policy:
 //
-// v0.1 has no failover: a provider error propagates verbatim. The router
-// already returns *provider.ProviderError with Vendor()=="gateway" for the
-// "no provider supports this model" case, so call sites can distinguish
-// routing failures from vendor-side rejections without parsing strings.
+//   - any *ProviderError with Retriable==true falls over to the next
+//     supporting provider in config order;
+//   - non-retriable errors abort immediately (no fallback attempt);
+//   - the caller's ctx is the only time budget — Chat checks ctx.Err()
+//     between attempts and surfaces cancellation as a dual-wrapped error
+//     so errors.Is works for both context.Canceled / DeadlineExceeded
+//     AND the most recent vendor sentinel.
+//
+// The router itself returns *provider.ProviderError with Vendor()=="gateway"
+// for "no provider supports this model" (ADR-003 Q3), so call sites can
+// distinguish routing failures from vendor-side rejections without parsing
+// strings.
 func (g *Gateway) Chat(ctx context.Context, req provider.ChatRequest) (provider.ChatResponse, error) {
-	p, err := router.Pick(g.providers, req.Model)
+	primary, fallbacks, err := router.PickWithFallbacks(g.providers, req.Model)
 	if err != nil {
 		return provider.ChatResponse{}, err
 	}
-	return p.Chat(ctx, req)
+
+	candidates := make([]provider.Provider, 0, 1+len(fallbacks))
+	candidates = append(candidates, primary)
+	candidates = append(candidates, fallbacks...)
+
+	var lastErr error
+	for _, p := range candidates {
+		// Caller's context wins — abort before the next attempt if cancelled.
+		// Dual-wrap preserves both errors so callers can:
+		//   errors.Is(err, context.Canceled)         // detect cancellation
+		//   errors.Is(err, provider.ErrRateLimited)  // see why we stopped
+		if cerr := ctx.Err(); cerr != nil {
+			if lastErr != nil {
+				return provider.ChatResponse{}, fmt.Errorf("%w: last vendor error: %w", cerr, lastErr)
+			}
+			return provider.ChatResponse{}, cerr
+		}
+
+		resp, cerr := p.Chat(ctx, req)
+		if cerr == nil {
+			return resp, nil
+		}
+		lastErr = cerr
+
+		if !shouldFailover(cerr) {
+			return provider.ChatResponse{}, cerr
+		}
+		// retriable — try the next candidate.
+	}
+
+	// Exhausted every supporting provider with retriable failures.
+	return provider.ChatResponse{}, lastErr
+}
+
+// shouldFailover reports whether err is a *provider.ProviderError marked
+// Retriable. Unknown error types (raw errors that aren't *ProviderError)
+// do NOT trigger failover — they're surfaced verbatim so a gateway-side
+// defect isn't laundered through every registered vendor.
+func shouldFailover(err error) bool {
+	var pe *provider.ProviderError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return pe.Retriable
 }
