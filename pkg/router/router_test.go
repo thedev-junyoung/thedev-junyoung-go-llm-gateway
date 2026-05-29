@@ -18,6 +18,8 @@ type fakeProvider struct {
 	models map[string]struct{}
 }
 
+var _ provider.Provider = (*fakeProvider)(nil)
+
 func newFake(name string, models ...string) *fakeProvider {
 	m := make(map[string]struct{}, len(models))
 	for _, model := range models {
